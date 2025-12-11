@@ -206,7 +206,7 @@
         Hey, looks like this work item is being closed without any time logged. Want to add it real quick?
       </div>
       <div class="nudge-quick-add">
-        <input type="number" id="nudgeHours" class="nudge-input-small" min="0.25" max="24" step="0.25" placeholder="Hours">
+        <input type="number" id="nudgeHours" class="nudge-input-small" min="0.25" max="24" step="0.25" placeholder="Hours" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
         <input type="date" id="nudgeDate" class="nudge-input-small" style="width: 130px;">
         <button class="nudge-btn" onclick="quickAddTime()">Add Time</button>
         <button class="nudge-btn nudge-btn-secondary" onclick="dismissNudge()">Skip</button>
@@ -216,7 +216,7 @@
     <div class="time-entry-form">
       <div class="form-group">
         <label for="hours">Hours Spent</label>
-        <input type="number" id="hours" min="0.25" max="24" step="0.25" placeholder="e.g., 2.5">
+        <input type="number" id="hours" min="0.25" max="24" step="0.25" placeholder="e.g., 2.5" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
       </div>
       
       <div class="form-group">
@@ -453,8 +453,8 @@
       var date = document.getElementById("date").value;
       var description = document.getElementById("description").value;
 
-      if (!hours || hours <= 0) {
-        showMessage("Please enter valid hours", "error");
+      if (!hours || hours <= 0 || hours > 24) {
+        showMessage("Please enter valid hours (0.25 - 24)", "error");
         return;
       }
       if (!date) {
@@ -688,8 +688,8 @@
       var hours = parseFloat(document.getElementById("nudgeHours").value);
       var date = document.getElementById("nudgeDate").value;
 
-      if (!hours || hours <= 0) {
-        showMessage("Please enter valid hours", "error");
+      if (!hours || hours <= 0 || hours > 24) {
+        showMessage("Please enter valid hours (0.25 - 24)", "error");
         return;
       }
       if (!date) {
