@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Time Reports</title>
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px;
+      padding: 20px;
+      margin: 0;
+      background: #faf9f8;
+    }
+    h1 {
+      margin: 0 0 20px 0;
+      color: #323130;
+      font-weight: 600;
+    }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: white;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .filter-group label {
+      font-weight: 600;
+      font-size: 12px;
+      color: #605e5c;
+    }
+    select, input[type="date"], input[type="text"] {
+      padding: 6px 8px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      font-size: 14px;
+      min-width: 150px;
+    }
+    select:focus, input:focus {
+      border-color: #0078d4;
+      outline: none;
+    }
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    button {
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background-color: #106ebe;
+    }
+    button.secondary {
+      background-color: #f3f2f1;
+      color: #323130;
+      border: 1px solid #8a8886;
+    }
+    button.secondary:hover {
+      background-color: #edebe9;
+    }
+    .summary-cards {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .summary-card {
+      background: white;
+      padding: 16px 24px;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      min-width: 150px;
+    }
+    .summary-card h3 {
+      margin: 0;
+      font-size: 12px;
+      color: #605e5c;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .summary-card .value {
+      font-size: 32px;
+      font-weight: 600;
+      color: #0078d4;
+      margin-top: 4px;
+    }
+    .summary-card .value small {
+      font-size: 16px;
+      color: #605e5c;
+    }
+    .results-table {
+      background: white;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      text-align: left;
+      padding: 12px 16px;
+      background: #f3f2f1;
+      font-weight: 600;
+      font-size: 12px;
+      color: #605e5c;
+      text-transform: uppercase;
+      border-bottom: 1px solid #edebe9;
+    }
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #edebe9;
+      color: #323130;
+    }
+    tr:hover {
+      background: #f3f2f1;
+    }
+    .no-data {
+      padding: 40px;
+      text-align: center;
+      color: #605e5c;
+    }
+    .tag {
+      display: inline-block;
+      background: #e6f2ff;
+      color: #0078d4;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      margin-right: 4px;
+      margin-bottom: 4px;
+    }
+    .group-header {
+      background: #f3f2f1;
+      font-weight: 600;
+    }
+    .group-header td {
+      padding: 8px 16px;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #605e5c;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 20px;
+      border-bottom: 2px solid #edebe9;
+    }
+    .tab {
+      padding: 12px 24px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      color: #605e5c;
+    }
+    .tab:hover {
+      color: #0078d4;
+    }
+    .tab.active {
+      border-bottom-color: #0078d4;
+      color: #0078d4;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Time Reports</h1>
+  
+  <div class="filters">
+    <div class="filter-group">
+      <label for="dateFrom">From Date</label>
+      <input type="date" id="dateFrom">
+    </div>
+    <div class="filter-group">
+      <label for="dateTo">To Date</label>
+      <input type="date" id="dateTo">
+    </div>
+    <div class="filter-group">
+      <label for="userFilter">User</label>
+      <select id="userFilter">
+        <option value="">All Users</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="epicFilter">Epic</label>
+      <select id="epicFilter">
+        <option value="">All Epics</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="projectFilter">Project</label>
+      <select id="projectFilter">
+        <option value="">All Projects</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="clientFilter">Client</label>
+      <select id="clientFilter">
+        <option value="">All Clients</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="tagFilter">Tag</label>
+      <select id="tagFilter">
+        <option value="">All Tags</option>
+      </select>
+    </div>
+    <div class="btn-group">
+      <button onclick="applyFilters()">Apply Filters</button>
+      <button class="secondary" onclick="clearFilters()">Clear</button>
+      <button class="secondary" onclick="exportCSV()">Export CSV</button>
+    </div>
+  </div>
+
+  <div class="summary-cards" id="summaryCards">
+    <div class="summary-card">
+      <h3>Total Hours</h3>
+      <div class="value" id="totalHours">0<small>h</small></div>
+    </div>
+    <div class="summary-card">
+      <h3>Entries</h3>
+      <div class="value" id="totalEntries">0</div>
+    </div>
+    <div class="summary-card">
+      <h3>Users</h3>
+      <div class="value" id="totalUsers">0</div>
+    </div>
+    <div class="summary-card">
+      <h3>Work Items</h3>
+      <div class="value" id="totalWorkItems">0</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-view="entries" onclick="switchView('entries')">All Entries</div>
+    <div class="tab" data-view="byUser" onclick="switchView('byUser')">By User</div>
+    <div class="tab" data-view="byEpic" onclick="switchView('byEpic')">By Epic</div>
+    <div class="tab" data-view="byProject" onclick="switchView('byProject')">By Project</div>
+    <div class="tab" data-view="byClient" onclick="switchView('byClient')">By Client</div>
+    <div class="tab" data-view="byTag" onclick="switchView('byTag')">By Tag</div>
+    <div class="tab" data-view="monthlyReport" onclick="switchView('monthlyReport')">Monthly Report</div>
+  </div>
+
+  <div class="results-table">
+    <div id="loading" class="loading">Loading...</div>
+    <table id="resultsTable" style="display: none;">
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+    <div id="noData" class="no-data" style="display: none;">No time entries found matching your filters.</div>
+  </div>
+
+  <script>
+    console.log("[TimeReport] Script started");
+    const STORAGE_KEY_PREFIX = "timetracker_";
+    const LEGACY_STORAGE_KEY = "timetracker_entries";
+    let allEntries = [];
+    let filteredEntries = [];
+    let currentView = "entries";
+
+    // Helper function to get storage key for a given date
+    function getStorageKeyForDate(dateString) {
+      var date = new Date(dateString);
+      var year = date.getFullYear();
+      var month = String(date.getMonth() + 1).padStart(2, '0');
+      return STORAGE_KEY_PREFIX + year + "_" + month;
+    }
+
+    // Get all months between two dates
+    function getMonthsBetween(startDate, endDate) {
+      var months = [];
+      var current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      var end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+      while (current <= end) {
+        months.push(new Date(current));
+        current.setMonth(current.getMonth() + 1);
+      }
+
+      return months;
+    }
+
+    // Wait for VSS SDK to be available
+    function initializeExtension() {
+      console.log("[TimeReport] Checking for VSS...", typeof VSS);
+      if (typeof VSS === "undefined") {
+        setTimeout(initializeExtension, 50);
+        return;
+      }
+
+      console.log("[TimeReport] VSS found, initializing...");
+      try {
+        VSS.init({
+          explicitNotifyLoaded: true,
+          usePlatformScripts: true
+        });
+      } catch (err) {
+        console.error("[TimeReport] VSS.init failed:", err);
+        return;
+      }
+
+      console.log("[TimeReport] Waiting for VSS.ready...");
+      VSS.ready(function() {
+        console.log("[TimeReport] VSS.ready callback fired");
+        try {
+          VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
+            console.log("[TimeReport] Got extension data service");
+            window.dataService = dataService;
+
+            // Set default date range (last 30 days)
+            var today = new Date();
+            var thirtyDaysAgo = new Date(today);
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+            document.getElementById("dateTo").valueAsDate = today;
+            document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
+
+            console.log("[TimeReport] Running migration check...");
+            // Run migration on first load
+            migrateLegacyData().then(function() {
+              console.log("[TimeReport] Migration check complete, loading entries...");
+              loadAllEntries();
+              console.log("[TimeReport] Notifying load succeeded");
+              VSS.notifyLoadSucceeded();
+            });
+          }, function(err) {
+            console.error("[TimeReport] Failed to get extension data service:", err);
+          });
+        } catch (err) {
+          console.error("[TimeReport] Error in VSS.ready:", err);
+        }
+      });
+    }
+
+    // Start initialization
+    initializeExtension();
+
+    // Migrate legacy data from single document to monthly partitions
+    function migrateLegacyData() {
+      return window.dataService.getValue(LEGACY_STORAGE_KEY, { scopeType: "Default" }).then(function(legacyData) {
+        if (!legacyData || legacyData.length === 0) {
+          console.log("[TimeReport] No legacy data to migrate");
+          return Promise.resolve();
+        }
+
+        console.log("[TimeReport] Migrating " + legacyData.length + " legacy entries...");
+
+        // Group entries by month
+        var entriesByMonth = {};
+        legacyData.forEach(function(entry) {
+          var key = getStorageKeyForDate(entry.date);
+          if (!entriesByMonth[key]) {
+            entriesByMonth[key] = [];
+          }
+          entriesByMonth[key].push(entry);
+        });
+
+        // Save each month's entries
+        var promises = Object.keys(entriesByMonth).map(function(key) {
+          return window.dataService.setValue(key, entriesByMonth[key], { scopeType: "Default" });
+        });
+
+        // After migration, delete legacy data
+        return Promise.all(promises).then(function() {
+          console.log("[TimeReport] Migration complete, deleting legacy data");
+          return window.dataService.setValue(LEGACY_STORAGE_KEY, null, { scopeType: "Default" });
+        });
+      }, function(err) {
+        console.log("[TimeReport] No legacy data found");
+        return Promise.resolve();
+      });
+    }
+
+    // Get entries for a specific month
+    function getEntriesForMonth(storageKey) {
+      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
+        console.log("[TimeReport] Loaded " + (data ? data.length : 0) + " entries from " + storageKey);
+        return data || [];
+      }, function(err) {
+        console.log("[TimeReport] No data found for " + storageKey);
+        return [];
+      });
+    }
+
+    function loadAllEntries() {
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("resultsTable").style.display = "none";
+      document.getElementById("noData").style.display = "none";
+
+      // Get date range from filters (or use defaults)
+      var dateFrom = document.getElementById("dateFrom").value;
+      var dateTo = document.getElementById("dateTo").value;
+
+      var startDate, endDate;
+      if (dateFrom && dateTo) {
+        startDate = new Date(dateFrom);
+        endDate = new Date(dateTo);
+      } else {
+        // Default: load last 12 months
+        endDate = new Date();
+        startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - 12);
+      }
+
+      // Get all months in the range
+      var months = getMonthsBetween(startDate, endDate);
+      console.log("[TimeReport] Loading " + months.length + " months of data");
+
+      // Load entries for each month
+      var promises = months.map(function(month) {
+        // Generate key directly from date object to avoid timezone issues
+        var year = month.getFullYear();
+        var monthNum = String(month.getMonth() + 1).padStart(2, '0');
+        var key = STORAGE_KEY_PREFIX + year + "_" + monthNum;
+        return getEntriesForMonth(key);
+      });
+
+      Promise.all(promises).then(function(results) {
+        allEntries = [];
+        results.forEach(function(monthEntries) {
+          allEntries = allEntries.concat(monthEntries);
+        });
+        console.log("[TimeReport] Loaded total of " + allEntries.length + " entries");
+        populateFilters();
+        applyFilters();
+      }, function(err) {
+        console.error("[TimeReport] Error loading entries:", err);
+        allEntries = [];
+        populateFilters();
+        applyFilters();
+      });
+    }
+
+    function populateFilters() {
+      // Unique users
+      var users = [...new Set(allEntries.map(e => JSON.stringify({id: e.userId, name: e.userName})))];
+      var userSelect = document.getElementById("userFilter");
+      userSelect.innerHTML = '<option value="">All Users</option>';
+      users.forEach(function(u) {
+        var user = JSON.parse(u);
+        var opt = document.createElement("option");
+        opt.value = user.id;
+        opt.textContent = user.name;
+        userSelect.appendChild(opt);
+      });
+
+      // Unique epics
+      var epics = [...new Set(allEntries.filter(e => e.epicId).map(e => JSON.stringify({id: e.epicId, title: e.epicTitle})))];
+      var epicSelect = document.getElementById("epicFilter");
+      epicSelect.innerHTML = '<option value="">All Epics</option>';
+      epics.forEach(function(ep) {
+        var epic = JSON.parse(ep);
+        var opt = document.createElement("option");
+        opt.value = epic.id;
+        opt.textContent = epic.title;
+        epicSelect.appendChild(opt);
+      });
+
+      // Unique projects
+      var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))];
+      var projectSelect = document.getElementById("projectFilter");
+      projectSelect.innerHTML = '<option value="">All Projects</option>';
+      projects.sort().forEach(function(proj) {
+        var opt = document.createElement("option");
+        opt.value = proj;
+        opt.textContent = proj;
+        projectSelect.appendChild(opt);
+      });
+
+      // Unique clients
+      var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))];
+      var clientSelect = document.getElementById("clientFilter");
+      clientSelect.innerHTML = '<option value="">All Clients</option>';
+      clients.sort().forEach(function(cli) {
+        var opt = document.createElement("option");
+        opt.value = cli;
+        opt.textContent = cli;
+        clientSelect.appendChild(opt);
+      });
+
+      // Unique tags
+      var allTags = new Set();
+      allEntries.forEach(function(e) {
+        if (e.tags) {
+          e.tags.split(";").forEach(function(t) {
+            var tag = t.trim();
+            if (tag) allTags.add(tag);
+          });
+        }
+      });
+      var tagSelect = document.getElementById("tagFilter");
+      tagSelect.innerHTML = '<option value="">All Tags</option>';
+      [...allTags].sort().forEach(function(tag) {
+        var opt = document.createElement("option");
+        opt.value = tag;
+        opt.textContent = tag;
+        tagSelect.appendChild(opt);
+      });
+    }
+
+    function applyFilters() {
+      var dateFrom = document.getElementById("dateFrom").value;
+      var dateTo = document.getElementById("dateTo").value;
+      var userId = document.getElementById("userFilter").value;
+      var epicId = document.getElementById("epicFilter").value;
+      var project = document.getElementById("projectFilter").value;
+      var client = document.getElementById("clientFilter").value;
+      var tag = document.getElementById("tagFilter").value;
+
+      filteredEntries = allEntries.filter(function(e) {
+        if (dateFrom && e.date < dateFrom) return false;
+        if (dateTo && e.date > dateTo) return false;
+        if (userId && e.userId !== userId) return false;
+        if (epicId && String(e.epicId) !== String(epicId)) return false;
+        if (project && (e.project || "(No Project)") !== project) return false;
+        if (client && (e.client || "(No Client)") !== client) return false;
+        if (tag && (!e.tags || !e.tags.toLowerCase().includes(tag.toLowerCase()))) return false;
+        return true;
+      });
+
+      updateSummary();
+      renderView();
+    }
+
+    function clearFilters() {
+      var today = new Date();
+      var thirtyDaysAgo = new Date(today);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      document.getElementById("dateTo").valueAsDate = today;
+      document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
+      document.getElementById("userFilter").value = "";
+      document.getElementById("epicFilter").value = "";
+      document.getElementById("projectFilter").value = "";
+      document.getElementById("clientFilter").value = "";
+      document.getElementById("tagFilter").value = "";
+      
+      applyFilters();
+    }
+
+    function updateSummary() {
+      var totalHours = filteredEntries.reduce((sum, e) => sum + e.hours, 0);
+      var uniqueUsers = new Set(filteredEntries.map(e => e.userId)).size;
+      var uniqueWorkItems = new Set(filteredEntries.map(e => e.workItemId)).size;
+
+      document.getElementById("totalHours").innerHTML = totalHours.toFixed(1) + "<small>h</small>";
+      document.getElementById("totalEntries").textContent = filteredEntries.length;
+      document.getElementById("totalUsers").textContent = uniqueUsers;
+      document.getElementById("totalWorkItems").textContent = uniqueWorkItems;
+    }
+
+    function switchView(view) {
+      currentView = view;
+      document.querySelectorAll(".tab").forEach(function(t) {
+        t.classList.toggle("active", t.dataset.view === view);
+      });
+      renderView();
+    }
+
+    function renderView() {
+      document.getElementById("loading").style.display = "none";
+
+      if (filteredEntries.length === 0) {
+        document.getElementById("resultsTable").style.display = "none";
+        document.getElementById("noData").style.display = "block";
+        return;
+      }
+
+      document.getElementById("resultsTable").style.display = "table";
+      document.getElementById("noData").style.display = "none";
+
+      switch (currentView) {
+        case "entries":
+          renderEntriesView();
+          break;
+        case "byUser":
+          renderByUserView();
+          break;
+        case "byEpic":
+          renderByEpicView();
+          break;
+        case "byProject":
+          renderByProjectView();
+          break;
+        case "byClient":
+          renderByClientView();
+          break;
+        case "byTag":
+          renderByTagView();
+          break;
+        case "monthlyReport":
+          renderMonthlyReportView();
+          break;
+      }
+    }
+
+    function renderEntriesView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th></tr>";
+
+      var sorted = [...filteredEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      tbody.innerHTML = sorted.map(function(e) {
+        var tags = e.tags ? e.tags.split(";").map(t => t.trim()).filter(t => t).map(t =>
+          '<span class="tag">' + escapeHtml(t) + '</span>'
+        ).join("") : "-";
+
+        return "<tr>" +
+          "<td>" + e.date + "</td>" +
+          "<td>" + escapeHtml(e.userName) + "</td>" +
+          "<td>" + escapeHtml(e.workItemTitle) + " (#" + e.workItemId + ")</td>" +
+          "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
+          "<td>" + tags + "</td>" +
+          "<td><strong>" + e.hours + "h</strong></td>" +
+          "<td>" + (e.description ? escapeHtml(e.description) : "-") + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderByUserView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>User</th><th>Total Hours</th><th>Entries</th><th>Work Items</th></tr>";
+      
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        if (!grouped[e.userId]) {
+          grouped[e.userId] = { name: e.userName, hours: 0, entries: 0, workItems: new Set() };
+        }
+        grouped[e.userId].hours += e.hours;
+        grouped[e.userId].entries++;
+        grouped[e.userId].workItems.add(e.workItemId);
+      });
+
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours);
+      
+      tbody.innerHTML = rows.map(function(r) {
+        return "<tr>" +
+          "<td><strong>" + escapeHtml(r.name) + "</strong></td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.workItems.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderByEpicView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Epic</th><th>Total Hours</th><th>Entries</th><th>Users</th></tr>";
+      
+      var grouped = { "_none": { name: "(No Epic)", hours: 0, entries: 0, users: new Set() }};
+      filteredEntries.forEach(function(e) {
+        var key = e.epicId || "_none";
+        if (!grouped[key]) {
+          grouped[key] = { name: e.epicTitle, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[key].hours += e.hours;
+        grouped[key].entries++;
+        grouped[key].users.add(e.userId);
+      });
+
+      var rows = Object.entries(grouped)
+        .filter(([k, v]) => v.entries > 0)
+        .map(([k, v]) => v)
+        .sort((a, b) => b.hours - a.hours);
+      
+      tbody.innerHTML = rows.map(function(r) {
+        return "<tr>" +
+          "<td><strong>" + escapeHtml(r.name) + "</strong></td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.users.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderByProjectView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Project</th><th>Total Hours</th><th>Entries</th><th>Users</th></tr>";
+
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var projectName = e.project || "(No Project)";
+        if (!grouped[projectName]) {
+          grouped[projectName] = { name: projectName, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[projectName].hours += e.hours;
+        grouped[projectName].entries++;
+        grouped[projectName].users.add(e.userId);
+      });
+
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours);
+
+      tbody.innerHTML = rows.map(function(r) {
+        return "<tr>" +
+          "<td><strong>" + escapeHtml(r.name) + "</strong></td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.users.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderByClientView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Client</th><th>Total Hours</th><th>Entries</th><th>Users</th></tr>";
+
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var clientName = e.client || "(No Client)";
+        if (!grouped[clientName]) {
+          grouped[clientName] = { name: clientName, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[clientName].hours += e.hours;
+        grouped[clientName].entries++;
+        grouped[clientName].users.add(e.userId);
+      });
+
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours);
+
+      tbody.innerHTML = rows.map(function(r) {
+        return "<tr>" +
+          "<td><strong>" + escapeHtml(r.name) + "</strong></td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.users.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderByTagView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      thead.innerHTML = "<tr><th>Tag</th><th>Total Hours</th><th>Entries</th><th>Users</th></tr>";
+
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var tags = e.tags ? e.tags.split(";").map(t => t.trim()).filter(t => t) : ["(No Tags)"];
+        tags.forEach(function(tag) {
+          if (!grouped[tag]) {
+            grouped[tag] = { name: tag, hours: 0, entries: 0, users: new Set() };
+          }
+          grouped[tag].hours += e.hours;
+          grouped[tag].entries++;
+          grouped[tag].users.add(e.userId);
+        });
+      });
+
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours);
+
+      tbody.innerHTML = rows.map(function(r) {
+        return "<tr>" +
+          "<td><span class='tag'>" + escapeHtml(r.name) + "</span></td>" +
+          "<td><strong>" + r.hours.toFixed(1) + "h</strong></td>" +
+          "<td>" + r.entries + "</td>" +
+          "<td>" + r.users.size + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function renderMonthlyReportView() {
+      var thead = document.getElementById("tableHead");
+      var tbody = document.getElementById("tableBody");
+
+      // Get unique users
+      var users = {};
+      filteredEntries.forEach(function(e) {
+        if (!users[e.userId]) {
+          users[e.userId] = e.userName;
+        }
+      });
+      var userIds = Object.keys(users).sort(function(a, b) {
+        return users[a].localeCompare(users[b]);
+      });
+
+      // Group by work item
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var key = e.workItemId;
+        if (!grouped[key]) {
+          grouped[key] = {
+            project: e.project || "(No Project)",
+            client: e.client || "(No Client)",
+            workItemId: e.workItemId,
+            workItemTitle: e.workItemTitle,
+            userHours: {}
+          };
+        }
+        if (!grouped[key].userHours[e.userId]) {
+          grouped[key].userHours[e.userId] = 0;
+        }
+        grouped[key].userHours[e.userId] += e.hours;
+      });
+
+      // Build header
+      var headerCells = "<th>Project</th><th>Client</th><th>Task ID</th><th>Task Title</th>";
+      userIds.forEach(function(userId) {
+        headerCells += "<th>" + escapeHtml(users[userId]) + "</th>";
+      });
+      headerCells += "<th>Total</th>";
+      thead.innerHTML = "<tr>" + headerCells + "</tr>";
+
+      // Build rows
+      var rows = Object.values(grouped).sort(function(a, b) {
+        if (a.project !== b.project) return a.project.localeCompare(b.project);
+        if (a.client !== b.client) return a.client.localeCompare(b.client);
+        return a.workItemId - b.workItemId;
+      });
+
+      tbody.innerHTML = rows.map(function(r) {
+        var userCells = "";
+        var total = 0;
+        userIds.forEach(function(userId) {
+          var hours = r.userHours[userId] || 0;
+          total += hours;
+          userCells += "<td>" + (hours > 0 ? hours.toFixed(1) : "-") + "</td>";
+        });
+
+        return "<tr>" +
+          "<td>" + escapeHtml(r.project) + "</td>" +
+          "<td>" + escapeHtml(r.client) + "</td>" +
+          "<td>#" + r.workItemId + "</td>" +
+          "<td>" + escapeHtml(r.workItemTitle) + "</td>" +
+          userCells +
+          "<td><strong>" + total.toFixed(1) + "h</strong></td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function exportCSV() {
+      if (filteredEntries.length === 0) {
+        alert("No data to export");
+        return;
+      }
+
+      var csv;
+      var filename;
+      var dateFrom = document.getElementById("dateFrom").value || "all";
+      var dateTo = document.getElementById("dateTo").value || "all";
+
+      switch (currentView) {
+        case "entries":
+          csv = exportEntriesCSV();
+          filename = "time-entries-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "byUser":
+          csv = exportByUserCSV();
+          filename = "time-by-user-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "byEpic":
+          csv = exportByEpicCSV();
+          filename = "time-by-epic-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "byProject":
+          csv = exportByProjectCSV();
+          filename = "time-by-project-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "byClient":
+          csv = exportByClientCSV();
+          filename = "time-by-client-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "byTag":
+          csv = exportByTagCSV();
+          filename = "time-by-tag-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        case "monthlyReport":
+          csv = exportMonthlyReportCSV();
+          filename = "monthly-report-" + dateFrom + "-to-" + dateTo + ".csv";
+          break;
+        default:
+          csv = exportEntriesCSV();
+          filename = "time-report-" + dateFrom + "-to-" + dateTo + ".csv";
+      }
+
+      var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      var link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    }
+
+    function exportEntriesCSV() {
+      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Epic", "Project", "Client", "Tags", "Hours", "Description"];
+      var rows = filteredEntries.map(function(e) {
+        return [
+          e.date,
+          e.userName,
+          e.userEmail || "",
+          e.workItemId,
+          '"' + (e.workItemTitle || "").replace(/"/g, '""') + '"',
+          '"' + (e.epicTitle || "").replace(/"/g, '""') + '"',
+          '"' + (e.project || "").replace(/"/g, '""') + '"',
+          '"' + (e.client || "").replace(/"/g, '""') + '"',
+          '"' + (e.tags || "").replace(/"/g, '""') + '"',
+          e.hours,
+          '"' + (e.description || "").replace(/"/g, '""') + '"'
+        ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByUserCSV() {
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        if (!grouped[e.userId]) {
+          grouped[e.userId] = { name: e.userName, email: e.userEmail, hours: 0, entries: 0, workItems: new Set() };
+        }
+        grouped[e.userId].hours += e.hours;
+        grouped[e.userId].entries++;
+        grouped[e.userId].workItems.add(e.workItemId);
+      });
+
+      var headers = ["User", "User Email", "Total Hours", "Entries", "Work Items"];
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours).map(function(r) {
+        return [
+          r.name,
+          r.email || "",
+          r.hours.toFixed(1),
+          r.entries,
+          r.workItems.size
+        ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByEpicCSV() {
+      var grouped = { "_none": { name: "(No Epic)", hours: 0, entries: 0, users: new Set() }};
+      filteredEntries.forEach(function(e) {
+        var key = e.epicId || "_none";
+        if (!grouped[key]) {
+          grouped[key] = { name: e.epicTitle, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[key].hours += e.hours;
+        grouped[key].entries++;
+        grouped[key].users.add(e.userId);
+      });
+
+      var headers = ["Epic", "Total Hours", "Entries", "Users"];
+      var rows = Object.entries(grouped)
+        .filter(([k, v]) => v.entries > 0)
+        .map(([k, v]) => v)
+        .sort((a, b) => b.hours - a.hours)
+        .map(function(r) {
+          return [
+            '"' + r.name.replace(/"/g, '""') + '"',
+            r.hours.toFixed(1),
+            r.entries,
+            r.users.size
+          ].join(",");
+        });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByProjectCSV() {
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var projectName = e.project || "(No Project)";
+        if (!grouped[projectName]) {
+          grouped[projectName] = { name: projectName, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[projectName].hours += e.hours;
+        grouped[projectName].entries++;
+        grouped[projectName].users.add(e.userId);
+      });
+
+      var headers = ["Project", "Total Hours", "Entries", "Users"];
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours).map(function(r) {
+        return [
+          '"' + r.name.replace(/"/g, '""') + '"',
+          r.hours.toFixed(1),
+          r.entries,
+          r.users.size
+        ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByClientCSV() {
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var clientName = e.client || "(No Client)";
+        if (!grouped[clientName]) {
+          grouped[clientName] = { name: clientName, hours: 0, entries: 0, users: new Set() };
+        }
+        grouped[clientName].hours += e.hours;
+        grouped[clientName].entries++;
+        grouped[clientName].users.add(e.userId);
+      });
+
+      var headers = ["Client", "Total Hours", "Entries", "Users"];
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours).map(function(r) {
+        return [
+          '"' + r.name.replace(/"/g, '""') + '"',
+          r.hours.toFixed(1),
+          r.entries,
+          r.users.size
+        ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportByTagCSV() {
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var tags = e.tags ? e.tags.split(";").map(t => t.trim()).filter(t => t) : ["(No Tags)"];
+        tags.forEach(function(tag) {
+          if (!grouped[tag]) {
+            grouped[tag] = { name: tag, hours: 0, entries: 0, users: new Set() };
+          }
+          grouped[tag].hours += e.hours;
+          grouped[tag].entries++;
+          grouped[tag].users.add(e.userId);
+        });
+      });
+
+      var headers = ["Tag", "Total Hours", "Entries", "Users"];
+      var rows = Object.values(grouped).sort((a, b) => b.hours - a.hours).map(function(r) {
+        return [
+          '"' + r.name.replace(/"/g, '""') + '"',
+          r.hours.toFixed(1),
+          r.entries,
+          r.users.size
+        ].join(",");
+      });
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportMonthlyReportCSV() {
+      // Get unique users
+      var users = {};
+      filteredEntries.forEach(function(e) {
+        if (!users[e.userId]) {
+          users[e.userId] = e.userName;
+        }
+      });
+      var userIds = Object.keys(users).sort(function(a, b) {
+        return users[a].localeCompare(users[b]);
+      });
+
+      // Group by work item
+      var grouped = {};
+      filteredEntries.forEach(function(e) {
+        var key = e.workItemId;
+        if (!grouped[key]) {
+          grouped[key] = {
+            project: e.project || "(No Project)",
+            client: e.client || "(No Client)",
+            workItemId: e.workItemId,
+            workItemTitle: e.workItemTitle,
+            userHours: {}
+          };
+        }
+        if (!grouped[key].userHours[e.userId]) {
+          grouped[key].userHours[e.userId] = 0;
+        }
+        grouped[key].userHours[e.userId] += e.hours;
+      });
+
+      // Build headers
+      var headers = ["Project", "Client", "Task ID", "Task Title"];
+      userIds.forEach(function(userId) {
+        headers.push(users[userId]);
+      });
+      headers.push("Total");
+
+      // Build rows
+      var rows = Object.values(grouped).sort(function(a, b) {
+        if (a.project !== b.project) return a.project.localeCompare(b.project);
+        if (a.client !== b.client) return a.client.localeCompare(b.client);
+        return a.workItemId - b.workItemId;
+      }).map(function(r) {
+        var row = [
+          '"' + r.project.replace(/"/g, '""') + '"',
+          '"' + r.client.replace(/"/g, '""') + '"',
+          r.workItemId,
+          '"' + r.workItemTitle.replace(/"/g, '""') + '"'
+        ];
+
+        var total = 0;
+        userIds.forEach(function(userId) {
+          var hours = r.userHours[userId] || 0;
+          total += hours;
+          row.push(hours > 0 ? hours.toFixed(1) : "0");
+        });
+        row.push(total.toFixed(1));
+
+        return row.join(",");
+      });
+
+      return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function escapeHtml(text) {
+      if (!text) return "";
+      var div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+*.vsix
+
+# IDE
+.idea/
+.vscode/
+
+# Claude
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db

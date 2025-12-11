@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/vss-extension",
+  "manifestVersion": 1,
+  "id": "timetracker-extension",
+  "version": "1.3.4",
+  "name": "Time Tracker",
+  "description": "Simple time tracking for user stories with reporting by user, epic, tag and date range",
+  "publisher": "miguelnicolas",
+  "categories": ["Azure Boards"],
+  "targets": [
+    {
+      "id": "Microsoft.VisualStudio.Services"
+    }
+  ],
+  "icons": {
+    "default": "static/icon.png"
+  },
+  "content": {
+    "details": {
+      "path": "README.md"
+    }
+  },
+  "files": [
+    {
+      "path": "src",
+      "addressable": true
+    },
+    {
+      "path": "static",
+      "addressable": true
+    },
+    {
+      "path": "lib",
+      "addressable": true
+    },
+    {
+      "path": "publicimages",
+      "addressable": true
+    }
+  ],
+  "contributions": [
+    {
+      "id": "time-entry-work-item-form",
+      "type": "ms.vss-work-web.work-item-form-page",
+      "targets": [
+        "ms.vss-work-web.work-item-form"
+      ],
+      "properties": {
+        "name": "Time Tracking",
+        "uri": "src/time-entry.html"
+      }
+    },
+    {
+      "id": "time-report-hub",
+      "type": "ms.vss-web.hub",
+      "targets": [
+        "ms.vss-work-web.work-hub-group"
+      ],
+      "properties": {
+        "name": "Time Reports",
+        "uri": "src/time-report.html",
+        "icon": "static/icon.png"
+      }
+    }
+  ],
+  "scopes": [
+    "vso.work",
+    "vso.work_write",
+    "vso.extension.data_write"
+  ]
+}

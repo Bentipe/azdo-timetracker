@@ -1,0 +1,19 @@
+{
+  "name": "azdo-timetracker",
+  "version": "1.0.0",
+  "description": "A simple time tracking extension for Azure DevOps that allows users to log time against User Stories and other work items, with reporting capabilities.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "azure-devops-extension-sdk": "^4.2.0",
+    "vss-web-extension-sdk": "^5.141.0"
+  }
+}

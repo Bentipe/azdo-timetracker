@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Time Entry</title>
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px;
+      padding: 10px;
+      margin: 0;
+    }
+    .time-entry-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: 400px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    label {
+      font-weight: 600;
+      color: #323130;
+    }
+    input, textarea {
+      padding: 6px 8px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      font-size: 14px;
+    }
+    input:focus, textarea:focus {
+      border-color: #0078d4;
+      outline: none;
+    }
+    button {
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background-color: #106ebe;
+    }
+    button:disabled {
+      background-color: #c8c6c4;
+      cursor: not-allowed;
+    }
+    .time-entries {
+      margin-top: 20px;
+      border-top: 1px solid #edebe9;
+      padding-top: 16px;
+    }
+    .time-entry-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px;
+      background: #f3f2f1;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+    .entry-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .entry-user {
+      font-weight: 600;
+    }
+    .entry-date {
+      font-size: 12px;
+      color: #605e5c;
+    }
+    .entry-hours {
+      font-size: 18px;
+      font-weight: 600;
+      color: #0078d4;
+    }
+    .entry-description {
+      font-size: 12px;
+      color: #605e5c;
+      margin-top: 4px;
+    }
+    .total-hours {
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 12px;
+      padding: 8px;
+      background: #e6f2ff;
+      border-radius: 4px;
+    }
+    .delete-btn {
+      background: #d13438;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    .delete-btn:hover {
+      background: #a4262c;
+    }
+    .message {
+      padding: 8px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+    .message.success {
+      background: #dff6dd;
+      color: #107c10;
+    }
+    .message.error {
+      background: #fde7e9;
+      color: #d13438;
+    }
+    .nudge-banner {
+      background: #fff4ce;
+      border-left: 4px solid #ffb900;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      border-radius: 4px;
+      display: none;
+      animation: slideDown 0.3s ease-out;
+    }
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .nudge-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .nudge-title {
+      font-weight: 600;
+      color: #323130;
+      font-size: 14px;
+    }
+    .nudge-close {
+      background: transparent;
+      border: none;
+      color: #605e5c;
+      cursor: pointer;
+      padding: 2px 6px;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .nudge-close:hover {
+      color: #323130;
+      background: rgba(0,0,0,0.05);
+    }
+    .nudge-content {
+      color: #605e5c;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .nudge-quick-add {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .nudge-input-small {
+      padding: 4px 8px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      font-size: 13px;
+      width: 80px;
+    }
+    .nudge-btn {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+    .nudge-btn-secondary {
+      background-color: transparent;
+      color: #605e5c;
+      border: 1px solid #8a8886;
+      padding: 5px 12px;
+    }
+    .nudge-btn-secondary:hover {
+      background-color: #f3f2f1;
+      color: #323130;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="message" class="message" style="display: none;"></div>
+
+    <!-- Gentle nudge banner when work item is closed without time -->
+    <div id="nudgeBanner" class="nudge-banner">
+      <div class="nudge-header">
+        <div class="nudge-title">⏰ No time logged yet</div>
+        <button class="nudge-close" onclick="dismissNudge()">×</button>
+      </div>
+      <div class="nudge-content">
+        Hey, looks like this work item is being closed without any time logged. Want to add it real quick?
+      </div>
+      <div class="nudge-quick-add">
+        <input type="number" id="nudgeHours" class="nudge-input-small" min="0.25" max="24" step="0.25" placeholder="Hours">
+        <input type="date" id="nudgeDate" class="nudge-input-small" style="width: 130px;">
+        <button class="nudge-btn" onclick="quickAddTime()">Add Time</button>
+        <button class="nudge-btn nudge-btn-secondary" onclick="dismissNudge()">Skip</button>
+      </div>
+    </div>
+
+    <div class="time-entry-form">
+      <div class="form-group">
+        <label for="hours">Hours Spent</label>
+        <input type="number" id="hours" min="0.25" max="24" step="0.25" placeholder="e.g., 2.5">
+      </div>
+      
+      <div class="form-group">
+        <label for="date">Date</label>
+        <input type="date" id="date">
+      </div>
+      
+      <div class="form-group">
+        <label for="description">Description (optional)</label>
+        <textarea id="description" rows="2" placeholder="What did you work on?"></textarea>
+      </div>
+      
+      <button id="saveBtn" onclick="saveTimeEntry()">Log Time</button>
+    </div>
+    
+    <div class="time-entries">
+      <h3>Time Entries</h3>
+      <div id="entriesList"></div>
+      <div id="totalHours" class="total-hours" style="display: none;"></div>
+    </div>
+  </div>
+
+  <script>
+    console.log("[TimeTracker] Script started");
+    let workItemId = null;
+    let currentUser = null;
+    const STORAGE_KEY_PREFIX = "timetracker_";
+    const LEGACY_STORAGE_KEY = "timetracker_entries";
+
+    // Helper function to get storage key for a given date
+    function getStorageKeyForDate(dateString) {
+      var date = new Date(dateString);
+      var year = date.getFullYear();
+      var month = String(date.getMonth() + 1).padStart(2, '0');
+      return STORAGE_KEY_PREFIX + year + "_" + month;
+    }
+
+    // Wait for VSS SDK to be available
+    function initializeExtension() {
+      console.log("[TimeTracker] Checking for VSS...", typeof VSS);
+      if (typeof VSS === "undefined") {
+        setTimeout(initializeExtension, 50);
+        return;
+      }
+
+      console.log("[TimeTracker] VSS found, initializing...");
+      try {
+        VSS.init({
+          explicitNotifyLoaded: true,
+          usePlatformScripts: true
+        });
+      } catch (err) {
+        console.error("[TimeTracker] VSS.init failed:", err);
+        return;
+      }
+
+      console.log("[TimeTracker] Waiting for VSS.ready...");
+      VSS.ready(function() {
+        console.log("[TimeTracker] VSS.ready callback fired");
+        try {
+          // Set default date to today
+          document.getElementById("date").valueAsDate = new Date();
+
+          // Get current user
+          VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
+            console.log("[TimeTracker] Got extension data service");
+            window.dataService = dataService;
+
+            var webContext = VSS.getWebContext();
+            currentUser = webContext.user;
+            console.log("[TimeTracker] Current user:", currentUser.name);
+
+            // Register work item notification and field observer
+            VSS.register(VSS.getContribution().id, function() {
+              return {
+                onLoaded: function(args) {
+                  console.log("[TimeTracker] Work item loaded:", args.id);
+                  workItemId = args.id;
+                  loadTimeEntries();
+                  setupFieldObserver();
+                },
+                onRefreshed: function(args) {
+                  console.log("[TimeTracker] Work item refreshed:", args.id);
+                  workItemId = args.id;
+                  loadTimeEntries();
+                },
+                onFieldChanged: function(args) {
+                  if (args.changedFields && args.changedFields["System.State"]) {
+                    console.log("[TimeTracker] State changed to:", args.changedFields["System.State"]);
+                    checkForTimeNudge(args.changedFields["System.State"]);
+                  }
+                }
+              };
+            });
+
+            // Run migration on first load
+            migrateLegacyData().then(function() {
+              console.log("[TimeTracker] Migration check complete");
+            });
+
+            console.log("[TimeTracker] Notifying load succeeded");
+            VSS.notifyLoadSucceeded();
+          }, function(err) {
+            console.error("[TimeTracker] Failed to get extension data service:", err);
+          });
+        } catch (err) {
+          console.error("[TimeTracker] Error in VSS.ready:", err);
+        }
+      });
+    }
+
+    // Start initialization
+    initializeExtension();
+
+    function showMessage(text, type) {
+      var msg = document.getElementById("message");
+      msg.textContent = text;
+      msg.className = "message " + type;
+      msg.style.display = "block";
+      setTimeout(function() {
+        msg.style.display = "none";
+      }, 3000);
+    }
+
+    // Migrate legacy data from single document to monthly partitions
+    function migrateLegacyData() {
+      return window.dataService.getValue(LEGACY_STORAGE_KEY, { scopeType: "Default" }).then(function(legacyData) {
+        if (!legacyData || legacyData.length === 0) {
+          console.log("[TimeTracker] No legacy data to migrate");
+          return Promise.resolve();
+        }
+
+        console.log("[TimeTracker] Migrating " + legacyData.length + " legacy entries...");
+
+        // Group entries by month
+        var entriesByMonth = {};
+        legacyData.forEach(function(entry) {
+          var key = getStorageKeyForDate(entry.date);
+          if (!entriesByMonth[key]) {
+            entriesByMonth[key] = [];
+          }
+          entriesByMonth[key].push(entry);
+        });
+
+        // Save each month's entries
+        var promises = Object.keys(entriesByMonth).map(function(key) {
+          return window.dataService.setValue(key, entriesByMonth[key], { scopeType: "Default" });
+        });
+
+        // After migration, delete legacy data
+        return Promise.all(promises).then(function() {
+          console.log("[TimeTracker] Migration complete, deleting legacy data");
+          return window.dataService.setValue(LEGACY_STORAGE_KEY, null, { scopeType: "Default" });
+        });
+      }, function(err) {
+        console.log("[TimeTracker] No legacy data found");
+        return Promise.resolve();
+      });
+    }
+
+    // Get entries for a specific month
+    function getEntriesForMonth(storageKey) {
+      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
+        return data || [];
+      }, function(err) {
+        return [];
+      });
+    }
+
+    // Get all entries for the current work item (loads last 12 months)
+    function getAllEntries() {
+      var promises = [];
+      var today = new Date();
+      var monthKeys = [];
+
+      // Load last 12 months to ensure we get all entries for this work item
+      for (var i = 0; i < 12; i++) {
+        var date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+        // Generate key directly from date object to avoid timezone issues
+        var year = date.getFullYear();
+        var month = String(date.getMonth() + 1).padStart(2, '0');
+        var key = STORAGE_KEY_PREFIX + year + "_" + month;
+        monthKeys.push(key);
+        promises.push(getEntriesForMonth(key));
+      }
+      console.log("[TimeTracker] Loading data from months:", monthKeys);
+
+      return Promise.all(promises).then(function(results) {
+        var allEntries = [];
+        results.forEach(function(monthEntries) {
+          if (monthEntries.length > 0) {
+            console.log("[TimeTracker] Found", monthEntries.length, "entries in a month");
+          }
+          allEntries = allEntries.concat(monthEntries);
+        });
+        console.log("[TimeTracker] Total entries across all months:", allEntries.length);
+        return allEntries;
+      });
+    }
+
+    // Save a new entry to the appropriate monthly partition
+    function saveEntry(entry) {
+      var storageKey = getStorageKeyForDate(entry.date);
+      console.log("[TimeTracker] Saving entry to partition:", storageKey, "Entry:", entry);
+
+      return getEntriesForMonth(storageKey).then(function(monthEntries) {
+        console.log("[TimeTracker] Current entries in partition:", monthEntries.length);
+        monthEntries.push(entry);
+        console.log("[TimeTracker] After adding new entry:", monthEntries.length);
+        return window.dataService.setValue(storageKey, monthEntries, { scopeType: "Default" });
+      }).then(function(result) {
+        console.log("[TimeTracker] Save completed successfully");
+        return result;
+      }, function(err) {
+        console.error("[TimeTracker] Save failed:", err);
+        throw err;
+      });
+    }
+
+    // Delete an entry from its monthly partition
+    function deleteEntryById(entryId, entryDate) {
+      var storageKey = getStorageKeyForDate(entryDate);
+
+      return getEntriesForMonth(storageKey).then(function(monthEntries) {
+        var filtered = monthEntries.filter(function(e) {
+          return e.id !== entryId;
+        });
+        return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
+      });
+    }
+
+    function saveTimeEntry() {
+      var hours = parseFloat(document.getElementById("hours").value);
+      var date = document.getElementById("date").value;
+      var description = document.getElementById("description").value;
+
+      if (!hours || hours <= 0) {
+        showMessage("Please enter valid hours", "error");
+        return;
+      }
+      if (!date) {
+        showMessage("Please select a date", "error");
+        return;
+      }
+
+      document.getElementById("saveBtn").disabled = true;
+
+      // Get work item details for epic/tags/project/client
+      VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function(VSS_Service, WIT_Client) {
+        var witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+
+        // First try with custom fields, fall back to basic fields if custom fields don't exist
+        var allFields = ["System.Title", "System.Tags", "System.Parent", "Custom.Project", "Custom.Client"];
+        var basicFields = ["System.Title", "System.Tags", "System.Parent"];
+
+        function createEntry(workItem) {
+          return {
+            id: Date.now().toString(),
+            workItemId: workItemId,
+            workItemTitle: workItem.fields["System.Title"],
+            parentId: workItem.fields["System.Parent"] || null,
+            tags: workItem.fields["System.Tags"] || "",
+            project: workItem.fields["Custom.Project"] || "(No Project)",
+            client: workItem.fields["Custom.Client"] || "(No Client)",
+            hours: hours,
+            date: date,
+            description: description,
+            userId: currentUser.id,
+            userName: currentUser.name,
+            userEmail: currentUser.email,
+            createdAt: new Date().toISOString()
+          };
+        }
+
+        function processWorkItem(workItem) {
+          var entry = createEntry(workItem);
+
+          // If there's a parent, get its details (could be an Epic or Feature)
+          var parentPromise = entry.parentId
+            ? witClient.getWorkItem(entry.parentId, ["System.Title", "System.WorkItemType", "System.Parent"])
+            : Promise.resolve(null);
+
+          parentPromise.then(function(parentItem) {
+            if (parentItem) {
+              entry.parentTitle = parentItem.fields["System.Title"];
+              entry.parentType = parentItem.fields["System.WorkItemType"];
+
+              // If parent is a Feature, try to get its parent (Epic)
+              if (parentItem.fields["System.Parent"]) {
+                return witClient.getWorkItem(parentItem.fields["System.Parent"], ["System.Title", "System.WorkItemType"]);
+              }
+            }
+            return null;
+          }).then(function(grandparentItem) {
+            if (grandparentItem && grandparentItem.fields["System.WorkItemType"] === "Epic") {
+              entry.epicId = grandparentItem.id;
+              entry.epicTitle = grandparentItem.fields["System.Title"];
+            } else if (entry.parentType === "Epic") {
+              entry.epicId = entry.parentId;
+              entry.epicTitle = entry.parentTitle;
+            }
+
+            // Save entry to monthly partition
+            saveEntry(entry).then(function() {
+              showMessage("Time entry saved!", "success");
+              document.getElementById("hours").value = "";
+              document.getElementById("description").value = "";
+              document.getElementById("saveBtn").disabled = false;
+              loadTimeEntries();
+            });
+          });
+        }
+
+        // Try to get work item with custom fields first, fall back to basic fields if that fails
+        witClient.getWorkItem(workItemId, allFields).then(processWorkItem, function(err) {
+          console.log("[TimeTracker] Custom fields not available, trying basic fields only:", err.message);
+          // Custom fields don't exist in this project, try with basic fields only
+          witClient.getWorkItem(workItemId, basicFields).then(processWorkItem, function(err) {
+            showMessage("Error: " + err.message, "error");
+            document.getElementById("saveBtn").disabled = false;
+          });
+        });
+      });
+    }
+
+    function loadTimeEntries() {
+      console.log("[TimeTracker] Loading time entries for work item:", workItemId);
+      getAllEntries().then(function(entries) {
+        console.log("[TimeTracker] Loaded total entries from all months:", entries.length);
+        var workItemEntries = entries.filter(function(e) {
+          return e.workItemId === workItemId;
+        });
+        console.log("[TimeTracker] Entries for this work item:", workItemEntries.length);
+
+        var listEl = document.getElementById("entriesList");
+        var totalEl = document.getElementById("totalHours");
+
+        if (workItemEntries.length === 0) {
+          console.log("[TimeTracker] No entries to display");
+          listEl.innerHTML = "<p style='color: #605e5c;'>No time entries yet.</p>";
+          totalEl.style.display = "none";
+          return;
+        }
+
+        // Sort by date descending
+        workItemEntries.sort(function(a, b) {
+          return new Date(b.date) - new Date(a.date);
+        });
+
+        var totalHours = workItemEntries.reduce(function(sum, e) {
+          return sum + e.hours;
+        }, 0);
+
+        listEl.innerHTML = workItemEntries.map(function(e) {
+          var canDelete = e.userId === currentUser.id;
+          return '<div class="time-entry-item">' +
+            '<div class="entry-info">' +
+              '<span class="entry-user">' + escapeHtml(e.userName) + '</span>' +
+              '<span class="entry-date">' + e.date + '</span>' +
+              (e.description ? '<span class="entry-description">' + escapeHtml(e.description) + '</span>' : '') +
+            '</div>' +
+            '<div style="display: flex; align-items: center; gap: 8px;">' +
+              '<span class="entry-hours">' + e.hours + 'h</span>' +
+              (canDelete ? '<button class="delete-btn" onclick="deleteEntry(\'' + e.id + '\')">Delete</button>' : '') +
+            '</div>' +
+          '</div>';
+        }).join("");
+
+        totalEl.textContent = "Total: " + totalHours.toFixed(2) + " hours";
+        totalEl.style.display = "block";
+      });
+    }
+
+    function deleteEntry(entryId) {
+      if (!confirm("Delete this time entry?")) return;
+
+      // Find the entry to get its date
+      getAllEntries().then(function(entries) {
+        var entry = entries.find(function(e) {
+          return e.id === entryId;
+        });
+
+        if (!entry) {
+          showMessage("Entry not found", "error");
+          return;
+        }
+
+        return deleteEntryById(entryId, entry.date);
+      }).then(function() {
+        showMessage("Entry deleted", "success");
+        loadTimeEntries();
+      });
+    }
+
+    function escapeHtml(text) {
+      var div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Setup field observer for state changes
+    function setupFieldObserver() {
+      VSS.require(["VSS/Service", "TFS/WorkItemTracking/Services"], function(VSS_Service, WIT_Services) {
+        WIT_Services.WorkItemFormService.getService().then(function(workItemFormService) {
+          console.log("[TimeTracker] Field observer setup complete");
+          window.workItemFormService = workItemFormService;
+        });
+      });
+    }
+
+    // Check if we should show the time nudge when state changes
+    function checkForTimeNudge(newState) {
+      // Check if state is "Done", "Closed", or "Resolved"
+      var closedStates = ["Done", "Closed", "Resolved"];
+      var stateLower = newState.toLowerCase();
+      var isClosed = closedStates.some(function(s) {
+        return s.toLowerCase() === stateLower;
+      });
+
+      if (!isClosed) {
+        console.log("[TimeTracker] State not closed, skipping nudge");
+        return;
+      }
+
+      console.log("[TimeTracker] Work item moved to closed state, checking for time entries...");
+
+      // Check if there are any time entries for this work item
+      getAllEntries().then(function(entries) {
+        var workItemEntries = entries.filter(function(e) {
+          return e.workItemId === workItemId;
+        });
+
+        if (workItemEntries.length === 0) {
+          console.log("[TimeTracker] No time entries found, showing nudge");
+          showNudgeBanner();
+        } else {
+          console.log("[TimeTracker] Time entries exist, no nudge needed");
+        }
+      });
+    }
+
+    // Show the gentle nudge banner
+    function showNudgeBanner() {
+      var banner = document.getElementById("nudgeBanner");
+      var nudgeDate = document.getElementById("nudgeDate");
+
+      // Set default date to today
+      nudgeDate.valueAsDate = new Date();
+
+      // Show the banner with animation
+      banner.style.display = "block";
+
+      // Scroll to top to make it visible
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // Dismiss the nudge banner
+    function dismissNudge() {
+      var banner = document.getElementById("nudgeBanner");
+      banner.style.display = "none";
+
+      // Clear the inputs
+      document.getElementById("nudgeHours").value = "";
+      document.getElementById("nudgeDate").valueAsDate = new Date();
+    }
+
+    // Quick add time from the nudge banner
+    function quickAddTime() {
+      var hours = parseFloat(document.getElementById("nudgeHours").value);
+      var date = document.getElementById("nudgeDate").value;
+
+      if (!hours || hours <= 0) {
+        showMessage("Please enter valid hours", "error");
+        return;
+      }
+      if (!date) {
+        showMessage("Please select a date", "error");
+        return;
+      }
+
+      // Use the main form's logic by populating it and triggering save
+      document.getElementById("hours").value = hours;
+      document.getElementById("date").value = date;
+
+      // Hide the nudge banner
+      dismissNudge();
+
+      // Trigger the save
+      saveTimeEntry();
+    }
+  </script>
+</body>
+</html>
