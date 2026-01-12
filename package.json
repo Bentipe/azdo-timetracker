@@ -7,11 +7,13 @@
     "lib": "lib"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tfx extension create --manifest-globs vss-extension.json",
+    "build:dev": "tfx extension create --manifest-globs vss-extension.dev.json",
+    "build:dev:inc": "tfx extension create --manifest-globs vss-extension.dev.json --rev-version"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "azure-devops-extension-sdk": "^4.2.0",
     "vss-web-extension-sdk": "^5.141.0"

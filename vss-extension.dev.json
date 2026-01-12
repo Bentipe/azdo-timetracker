@@ -1,12 +1,13 @@
 {
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
-  "id": "timetracker-extension",
-  "version": "1.4.9",
-  "name": "Time Tracker",
-  "description": "Simple time tracking for user stories with reporting by user, epic, tag and date range",
+  "id": "timetracker-extension-dev",
+  "version": "1.4.5",
+  "name": "Time Tracker (DEV)",
+  "description": "[DEVELOPMENT] Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
   "categories": ["Azure Boards"],
+  "galleryFlags": ["Preview"],
   "targets": [
     {
       "id": "Microsoft.VisualStudio.Services"
@@ -46,7 +47,7 @@
         "ms.vss-work-web.work-item-form"
       ],
       "properties": {
-        "name": "Time Tracking",
+        "name": "Time Tracking (DEV)",
         "uri": "src/time-entry.html"
       }
     },
@@ -57,7 +58,7 @@
         "ms.vss-work-web.work-hub-group"
       ],
       "properties": {
-        "name": "Time Reports",
+        "name": "Time Reports (DEV)",
         "uri": "src/time-report.html",
         "icon": "static/icon.png"
       }

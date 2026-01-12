@@ -10,6 +10,10 @@
       font-size: 14px;
       padding: 10px;
       margin: 0;
+      overflow: auto;
+    }
+    #app {
+      min-width: fit-content;
     }
     .time-entry-form {
       display: flex;
@@ -225,8 +229,8 @@
       </div>
       
       <div class="form-group">
-        <label for="description">Description (optional)</label>
-        <textarea id="description" rows="2" placeholder="What did you work on?"></textarea>
+        <label for="description">Description (optional, max 100 chars)</label>
+        <textarea id="description" rows="2" maxlength="100" placeholder="What did you work on?"></textarea>
       </div>
       
       <button id="saveBtn" onclick="saveTimeEntry()">Log Time</button>
@@ -448,6 +452,28 @@
       });
     }
 
+    // Possible field reference names for Client (varies by where field was created in Azure DevOps)
+    var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
+    var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
+
+    // Helper to get field value from multiple possible reference names
+    function getFieldValue(fields, refNames, defaultValue) {
+      for (var i = 0; i < refNames.length; i++) {
+        if (fields[refNames[i]]) {
+          return fields[refNames[i]];
+        }
+      }
+      return defaultValue;
+    }
+
+    // Get all possible field names for API requests
+    function getAllClientFieldRefs() {
+      return CLIENT_FIELD_REFS.slice();
+    }
+    function getAllProjectFieldRefs() {
+      return PROJECT_FIELD_REFS.slice();
+    }
+
     function saveTimeEntry() {
       var hours = parseFloat(document.getElementById("hours").value);
       var date = document.getElementById("date").value;
@@ -468,9 +494,8 @@
       VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function(VSS_Service, WIT_Client) {
         var witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
 
-        // First try with custom fields, fall back to basic fields if custom fields don't exist
-        var allFields = ["System.Title", "System.Tags", "System.Parent", "Custom.Project", "Custom.Client"];
-        var basicFields = ["System.Title", "System.Tags", "System.Parent"];
+        // Request work item without specifying fields to get all available fields
+        // This avoids 400 errors when some custom fields don't exist
 
         function createEntry(workItem) {
           return {
@@ -479,8 +504,8 @@
             workItemTitle: workItem.fields["System.Title"],
             parentId: workItem.fields["System.Parent"] || null,
             tags: workItem.fields["System.Tags"] || "",
-            project: workItem.fields["Custom.Project"] || "(No Project)",
-            client: workItem.fields["Custom.Client"] || "(No Client)",
+            project: getFieldValue(workItem.fields, PROJECT_FIELD_REFS, "(No Project)"),
+            client: getFieldValue(workItem.fields, CLIENT_FIELD_REFS, "(No Client)"),
             hours: hours,
             date: date,
             description: description,
@@ -495,8 +520,9 @@
           var entry = createEntry(workItem);
 
           // If there's a parent, get its details (could be an Epic or Feature)
+          // Use expand=All (4) to get all fields including System.Parent
           var parentPromise = entry.parentId
-            ? witClient.getWorkItem(entry.parentId, ["System.Title", "System.WorkItemType", "System.Parent"])
+            ? witClient.getWorkItem(entry.parentId, null, null, 4)
             : Promise.resolve(null);
 
           parentPromise.then(function(parentItem) {
@@ -504,19 +530,83 @@
               entry.parentTitle = parentItem.fields["System.Title"];
               entry.parentType = parentItem.fields["System.WorkItemType"];
 
-              // If parent is a Feature, try to get its parent (Epic)
+              // Inherit tags from parent if task has no tags
+              if (!entry.tags && parentItem.fields["System.Tags"]) {
+                entry.tags = parentItem.fields["System.Tags"];
+                entry.tagsInheritedFrom = "parent";
+              }
+
+              // Inherit project from parent if task has no project
+              var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
+              if (entry.project === "(No Project)" && parentProject) {
+                entry.project = parentProject;
+                entry.projectInheritedFrom = "parent";
+              }
+
+              // Inherit client from parent if task has no client
+              var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
+              if (entry.client === "(No Client)" && parentClient) {
+                entry.client = parentClient;
+                entry.clientInheritedFrom = "parent";
+              }
+
+              // If parent is an Epic, use it directly and inherit remaining properties
+              if (parentItem.fields["System.WorkItemType"] === "Epic") {
+                entry.epicId = entry.parentId;
+                entry.epicTitle = entry.parentTitle;
+
+                // Inherit project from Epic if still no project (reuse parentProject from above)
+                if (entry.project === "(No Project)" && parentProject) {
+                  entry.project = parentProject;
+                  entry.projectInheritedFrom = "epic";
+                }
+
+                // Inherit client from Epic if still no client (reuse parentClient from above)
+                if (entry.client === "(No Client)" && parentClient) {
+                  entry.client = parentClient;
+                  entry.clientInheritedFrom = "epic";
+                }
+
+                return { parentItem: parentItem, grandparentItem: null };
+              }
+
+              // If parent has a parent, try to get it (could be Epic)
               if (parentItem.fields["System.Parent"]) {
-                return witClient.getWorkItem(parentItem.fields["System.Parent"], ["System.Title", "System.WorkItemType"]);
+                return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4).then(function(grandparentItem) {
+                  return { parentItem: parentItem, grandparentItem: grandparentItem };
+                });
               }
             }
-            return null;
-          }).then(function(grandparentItem) {
-            if (grandparentItem && grandparentItem.fields["System.WorkItemType"] === "Epic") {
-              entry.epicId = grandparentItem.id;
-              entry.epicTitle = grandparentItem.fields["System.Title"];
-            } else if (entry.parentType === "Epic") {
-              entry.epicId = entry.parentId;
-              entry.epicTitle = entry.parentTitle;
+            return { parentItem: parentItem, grandparentItem: null };
+          }).then(function(result) {
+            var parentItem = result ? result.parentItem : null;
+            var grandparentItem = result ? result.grandparentItem : null;
+
+            if (grandparentItem) {
+              if (grandparentItem.fields["System.WorkItemType"] === "Epic") {
+                entry.epicId = grandparentItem.id;
+                entry.epicTitle = grandparentItem.fields["System.Title"];
+
+                // Inherit tags from grandparent (Epic) if still no tags
+                if (!entry.tags && grandparentItem.fields["System.Tags"]) {
+                  entry.tags = grandparentItem.fields["System.Tags"];
+                  entry.tagsInheritedFrom = "epic";
+                }
+
+                // Inherit project from grandparent (Epic) if still no project
+                var grandparentProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
+                if (entry.project === "(No Project)" && grandparentProject) {
+                  entry.project = grandparentProject;
+                  entry.projectInheritedFrom = "epic";
+                }
+
+                // Inherit client from grandparent (Epic) if still no client
+                var grandparentClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
+                if (entry.client === "(No Client)" && grandparentClient) {
+                  entry.client = grandparentClient;
+                  entry.clientInheritedFrom = "epic";
+                }
+              }
             }
 
             // Save entry to monthly partition
@@ -530,14 +620,11 @@
           });
         }
 
-        // Try to get work item with custom fields first, fall back to basic fields if that fails
-        witClient.getWorkItem(workItemId, allFields).then(processWorkItem, function(err) {
-          console.log("[TimeTracker] Custom fields not available, trying basic fields only:", err.message);
-          // Custom fields don't exist in this project, try with basic fields only
-          witClient.getWorkItem(workItemId, basicFields).then(processWorkItem, function(err) {
-            showMessage("Error: " + err.message, "error");
-            document.getElementById("saveBtn").disabled = false;
-          });
+        // Get work item with expand=All to retrieve all available fields including System.Parent
+        // expand parameter: 0=None, 1=Relations, 2=Fields, 3=Links, 4=All
+        witClient.getWorkItem(workItemId, null, null, 4).then(processWorkItem, function(err) {
+          showMessage("Error: " + err.message, "error");
+          document.getElementById("saveBtn").disabled = false;
         });
       });
     }

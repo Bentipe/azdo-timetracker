@@ -11,6 +11,7 @@
       padding: 20px;
       margin: 0;
       background: #faf9f8;
+      overflow: auto;
     }
     h1 {
       margin: 0 0 20px 0;
@@ -227,6 +228,7 @@
       <button onclick="applyFilters()">Apply Filters</button>
       <button class="secondary" onclick="clearFilters()">Clear</button>
       <button class="secondary" onclick="exportCSV()">Export CSV</button>
+      <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
     </div>
   </div>
 
@@ -616,7 +618,7 @@
       var thead = document.getElementById("tableHead");
       var tbody = document.getElementById("tableBody");
 
-      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th></tr>";
+      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Parent</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th></tr>";
 
       var sorted = [...filteredEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -625,10 +627,17 @@
           '<span class="tag">' + escapeHtml(t) + '</span>'
         ).join("") : "-";
 
+        // Show parent (User Story, Feature, etc.) if available and not an Epic
+        var parentDisplay = "-";
+        if (e.parentTitle && e.parentType && e.parentType !== "Epic") {
+          parentDisplay = escapeHtml(e.parentTitle) + " <small style='color:#605e5c;'>(" + escapeHtml(e.parentType) + ")</small>";
+        }
+
         return "<tr>" +
           "<td>" + e.date + "</td>" +
           "<td>" + escapeHtml(e.userName) + "</td>" +
           "<td>" + escapeHtml(e.workItemTitle) + " (#" + e.workItemId + ")</td>" +
+          "<td>" + parentDisplay + "</td>" +
           "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
           "<td>" + tags + "</td>" +
           "<td><strong>" + e.hours + "h</strong></td>" +
@@ -801,16 +810,22 @@
         return users[a].localeCompare(users[b]);
       });
 
-      // Group by work item
+      // Group by User Story (parent) if available, otherwise by work item
       var grouped = {};
       filteredEntries.forEach(function(e) {
-        var key = e.workItemId;
+        // Use parent (User Story/Feature) as the grouping key if available
+        var hasParent = e.parentId && e.parentTitle && e.parentType !== "Epic";
+        var key = hasParent ? e.parentId : e.workItemId;
+        var title = hasParent ? e.parentTitle : e.workItemTitle;
+        var itemType = hasParent ? e.parentType : null;
+
         if (!grouped[key]) {
           grouped[key] = {
             project: e.project || "(No Project)",
             client: e.client || "(No Client)",
-            workItemId: e.workItemId,
-            workItemTitle: e.workItemTitle,
+            workItemId: key,
+            workItemTitle: title,
+            workItemType: itemType,
             userHours: {}
           };
         }
@@ -821,7 +836,7 @@
       });
 
       // Build header
-      var headerCells = "<th>Project</th><th>Client</th><th>Task ID</th><th>Task Title</th>";
+      var headerCells = "<th>Project</th><th>Client</th><th>User Story ID</th><th>User Story Title</th>";
       userIds.forEach(function(userId) {
         headerCells += "<th>" + escapeHtml(users[userId]) + "</th>";
       });
@@ -908,7 +923,7 @@
     }
 
     function exportEntriesCSV() {
-      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Epic", "Project", "Client", "Tags", "Hours", "Description"];
+      var headers = ["Date", "User", "User Email", "Work Item ID", "Work Item Title", "Parent ID", "Parent Title", "Parent Type", "Epic", "Project", "Client", "Tags", "Hours", "Description"];
       var rows = filteredEntries.map(function(e) {
         return [
           e.date,
@@ -916,6 +931,9 @@
           e.userEmail || "",
           e.workItemId,
           '"' + (e.workItemTitle || "").replace(/"/g, '""') + '"',
+          e.parentId || "",
+          '"' + (e.parentTitle || "").replace(/"/g, '""') + '"',
+          '"' + (e.parentType || "").replace(/"/g, '""') + '"',
           '"' + (e.epicTitle || "").replace(/"/g, '""') + '"',
           '"' + (e.project || "").replace(/"/g, '""') + '"',
           '"' + (e.client || "").replace(/"/g, '""') + '"',
@@ -1065,16 +1083,20 @@
         return users[a].localeCompare(users[b]);
       });
 
-      // Group by work item
+      // Group by User Story (parent) if available, otherwise by work item
       var grouped = {};
       filteredEntries.forEach(function(e) {
-        var key = e.workItemId;
+        // Use parent (User Story/Feature) as the grouping key if available
+        var hasParent = e.parentId && e.parentTitle && e.parentType !== "Epic";
+        var key = hasParent ? e.parentId : e.workItemId;
+        var title = hasParent ? e.parentTitle : e.workItemTitle;
+
         if (!grouped[key]) {
           grouped[key] = {
             project: e.project || "(No Project)",
             client: e.client || "(No Client)",
-            workItemId: e.workItemId,
-            workItemTitle: e.workItemTitle,
+            workItemId: key,
+            workItemTitle: title,
             userHours: {}
           };
         }
@@ -1085,7 +1107,7 @@
       });
 
       // Build headers
-      var headers = ["Project", "Client", "Task ID", "Task Title"];
+      var headers = ["Project", "Client", "User Story ID", "User Story Title"];
       userIds.forEach(function(userId) {
         headers.push(users[userId]);
       });
@@ -1116,6 +1138,27 @@
       });
 
       return headers.join(",") + "\n" + rows.join("\n");
+    }
+
+    function exportBackupJSON() {
+      if (allEntries.length === 0) {
+        alert("No data to backup");
+        return;
+      }
+
+      var backup = {
+        exportDate: new Date().toISOString(),
+        exportVersion: "1.0",
+        totalEntries: allEntries.length,
+        entries: allEntries
+      };
+
+      var json = JSON.stringify(backup, null, 2);
+      var blob = new Blob([json], { type: "application/json;charset=utf-8;" });
+      var link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "timetracker-backup-" + new Date().toISOString().split("T")[0] + ".json";
+      link.click();
     }
 
     function escapeHtml(text) {

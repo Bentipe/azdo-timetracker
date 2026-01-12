@@ -15,24 +15,40 @@ A lightweight time tracking extension for Azure DevOps that runs directly in you
 ## Features
 
 ### Time Entry (Work Item Form)
-- Log hours spent on any work item
-- Add date and description
+- Log hours spent on any work item (Tasks, Bugs, User Stories, Features, etc.)
+- Add date and optional description (max 100 characters)
 - View all time entries for the current work item
 - Delete your own entries
 - Gentle reminder when closing work items without logged time
+- **Smart Property Inheritance**: Automatically inherits missing properties from parent work items
+
+### Property Inheritance
+
+When logging time on a Task or Bug, the extension automatically inherits missing properties from the parent hierarchy:
+
+| Property | Inheritance Chain |
+|----------|-------------------|
+| Tags | Task/Bug → User Story/Feature → Epic |
+| Project | Task/Bug → User Story/Feature → Epic |
+| Client | Task/Bug → User Story/Feature → Epic |
+| Epic | Automatically resolved from hierarchy |
+
+This means you only need to set Tags, Project, and Client on your User Stories or Epics - all child work items will inherit these values automatically.
 
 ### Time Reports (Hub)
 - Filter by date range, user, epic, project, client, and tags
 - Summary cards showing total hours, entries, users, and work items
 - Multiple views:
-  - **All Entries**: Detailed list of all time entries
+  - **All Entries**: Detailed list with Date, User, Work Item, Parent (User Story/Feature), Epic, Tags, Hours, and Description
   - **By User**: Hours aggregated per team member
   - **By Epic**: Hours aggregated per epic
   - **By Project**: Hours aggregated per project
   - **By Client**: Hours aggregated per client
   - **By Tag**: Hours aggregated per tag
-  - **Monthly Report**: Matrix view for invoicing
-- Export to CSV for external processing/invoicing
+  - **Monthly Report**: Matrix view showing hours per user per User Story - automatically aggregates tasks/bugs under their parent User Story (great for invoicing)
+- **Export Options**:
+  - **CSV Export**: Export current view data for external processing/invoicing
+  - **Backup JSON**: Full backup of all time entries with metadata
 
 ## Installation
 
@@ -109,10 +125,11 @@ Time entries are stored using Azure DevOps Extension Data Service with **collect
 
 ## Limitations
 
-- Epic association works for standard hierarchy (Epic > Feature > User Story)
-- CSV export includes all filtered entries
+- Hierarchy support works for standard Azure DevOps hierarchy (Epic → Feature → User Story → Task/Bug)
+- Property inheritance only applies to new time entries (existing entries won't be retroactively updated)
 - Users can only delete their own time entries
 - Custom.Project and Custom.Client fields must use exact reference names if you want project/client tracking
+- Maximum of 3 levels of hierarchy traversal (work item → parent → grandparent)
 
 ## Development
 
