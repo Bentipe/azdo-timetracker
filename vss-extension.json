@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
   "id": "timetracker-extension",
-  "version": "1.4.9",
+  "version": "1.5.2",
   "name": "Time Tracker",
   "description": "Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
