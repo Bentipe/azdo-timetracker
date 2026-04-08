@@ -430,7 +430,8 @@
       var storageKey = getStorageKeyForDate(entry.date);
       console.log("[TimeTracker] Saving entry to partition:", storageKey, "Entry:", entry);
 
-      return getEntriesForMonth(storageKey).then(function(monthEntries) {
+      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
+        var monthEntries = data || [];
         console.log("[TimeTracker] Current entries in partition:", monthEntries.length);
         monthEntries.push(entry);
         console.log("[TimeTracker] After adding new entry:", monthEntries.length);
@@ -448,8 +449,11 @@
     function deleteEntryById(entryId, entryDate) {
       var storageKey = getStorageKeyForDate(entryDate);
 
-      return getEntriesForMonth(storageKey).then(function(monthEntries) {
-        var filtered = monthEntries.filter(function(e) {
+      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
+        if (!data || data.length === 0) {
+          throw new Error("No entries found for this month — aborting delete to prevent data loss");
+        }
+        var filtered = data.filter(function(e) {
           return e.id !== entryId;
         });
         return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
