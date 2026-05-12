@@ -289,6 +289,43 @@
     let allEntries = [];
     let filteredEntries = [];
     let currentView = "entries";
+    var pendingFilters = null;
+
+    function parseHashString(hash) {
+      if (!hash) return null;
+      var raw = {};
+      hash.split("&").forEach(function(pair) {
+        var idx = pair.indexOf("=");
+        if (idx > 0) raw[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+      });
+      if (!Object.keys(raw).length) return null;
+      // Map URL-friendly names to internal filter keys
+      var params = {};
+      if (raw.startdate) params.dateFrom = raw.startdate;
+      if (raw.enddate)   params.dateTo   = raw.enddate;
+      if (raw.user)      params.user     = raw.user;
+      if (raw.epic)      params.epic     = raw.epic;
+      if (raw.project)   params.project  = raw.project;
+      if (raw.client)    params.client   = raw.client;
+      if (raw.tag)       params.tag      = raw.tag;
+      return Object.keys(params).length ? params : null;
+    }
+
+    function writeHashFilters() {
+      var parts = [];
+      var dateFrom = document.getElementById("dateFrom").value;
+      var dateTo   = document.getElementById("dateTo").value;
+      if (dateFrom) parts.push("startdate=" + encodeURIComponent(dateFrom));
+      if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
+      [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"]].forEach(function(pair) {
+        var v = document.getElementById(pair[0]).value;
+        if (v) parts.push(pair[1] + "=" + encodeURIComponent(v));
+      });
+      var hashStr = parts.join("&");
+      VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
+        nav.setHash(hashStr);
+      });
+    }
 
     // Helper function to get storage key for a given date
     function getStorageKeyForDate(dateString) {
@@ -348,13 +385,26 @@
             document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
 
             console.log("[TimeReport] Running migration check...");
-            // Run migration on first load
-            migrateLegacyData().then(function() {
-              console.log("[TimeReport] Migration check complete, loading entries...");
-              loadAllEntries();
-              console.log("[TimeReport] Notifying load succeeded");
-              VSS.notifyLoadSucceeded();
-            });
+            function startLoad() {
+              migrateLegacyData().then(function() {
+                console.log("[TimeReport] Migration check complete, loading entries...");
+                loadAllEntries();
+                console.log("[TimeReport] Notifying load succeeded");
+                VSS.notifyLoadSucceeded();
+              });
+            }
+
+            VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
+              nav.getHash().then(function(hash) {
+                var hashFilters = parseHashString(hash);
+                if (hashFilters) {
+                  if (hashFilters.dateFrom) document.getElementById("dateFrom").value = hashFilters.dateFrom;
+                  if (hashFilters.dateTo)   document.getElementById("dateTo").value   = hashFilters.dateTo;
+                  pendingFilters = hashFilters;
+                }
+                startLoad();
+              }, startLoad);
+            }, startLoad);
           }, function(err) {
             console.error("[TimeReport] Failed to get extension data service:", err);
           });
@@ -464,6 +514,15 @@
     }
 
     function populateFilters() {
+      // Save current selections (use pendingFilters from hash on first load)
+      var pf = pendingFilters;
+      pendingFilters = null;
+      var savedUser    = pf && pf.user    !== undefined ? pf.user    : document.getElementById("userFilter").value;
+      var savedEpic    = pf && pf.epic    !== undefined ? pf.epic    : document.getElementById("epicFilter").value;
+      var savedProject = pf && pf.project !== undefined ? pf.project : document.getElementById("projectFilter").value;
+      var savedClient  = pf && pf.client  !== undefined ? pf.client  : document.getElementById("clientFilter").value;
+      var savedTag     = pf && pf.tag     !== undefined ? pf.tag     : document.getElementById("tagFilter").value;
+
       // Unique users
       var users = [...new Set(allEntries.map(e => JSON.stringify({id: e.userId, name: e.userName})))];
       var userSelect = document.getElementById("userFilter");
@@ -528,6 +587,13 @@
         opt.textContent = tag;
         tagSelect.appendChild(opt);
       });
+
+      // Restore selections after rebuild
+      document.getElementById("userFilter").value    = savedUser;
+      document.getElementById("epicFilter").value    = savedEpic;
+      document.getElementById("projectFilter").value = savedProject;
+      document.getElementById("clientFilter").value  = savedClient;
+      document.getElementById("tagFilter").value     = savedTag;
     }
 
     function applyFilters() {
@@ -552,6 +618,7 @@
 
       updateSummary();
       renderView();
+      writeHashFilters();
     }
 
     function clearFilters() {
