@@ -1,0 +1,58 @@
+# Weekly Hour Summary Emails
+#
+# Runs every Monday at 10:00 AM (UTC). Adjust the cron expression below if
+# your server timezone differs — Azure DevOps Server schedules in UTC.
+# Example: UTC+2 → use "0 8 * * 1" to fire at 10:00 local time.
+#
+# Pipeline variables to configure (mark secrets as Secret in the UI):
+#
+#   AZDO_SERVER_URL    https://devops.yourcompany.com/YourCollection
+#   AZDO_PAT           Personal Access Token — needs vso.extension.data scope  [SECRET]
+#   AZDO_PUBLISHER     miguelnicolas                         (can leave default)
+#   AZDO_EXTENSION_ID  timetracker-extension                 (can leave default)
+#   SMTP_HOST          your-mail-relay.company.com
+#   SMTP_FROM          timetracker@yourcompany.com
+#   SMTP_PORT          25                                    (optional, default 25)
+#   SMTP_SECURE        false                                 (optional, set true for TLS)
+#   SMTP_USER                                               (optional, leave empty for relay)
+#   SMTP_PASS                                               (optional)                [SECRET]
+#   DRY_RUN            false   set to true to log output without sending emails
+
+schedules:
+  - cron: "0 10 * * 1"
+    displayName: Monday 10:00 UTC — weekly hour summary
+    branches:
+      include:
+        - main
+    always: true
+
+trigger: none
+
+pool:
+  name: Default   # your self-hosted agent pool
+
+steps:
+  - task: NodeTool@0
+    displayName: Use Node.js 16
+    inputs:
+      versionSpec: '16.x'
+
+  - script: npm install --production
+    displayName: Install script dependencies
+    workingDirectory: $(Build.SourcesDirectory)/scripts
+
+  - script: node send-weekly-summary.js
+    displayName: Send weekly hour summary emails
+    workingDirectory: $(Build.SourcesDirectory)/scripts
+    env:
+      AZDO_SERVER_URL:    $(AZDO_SERVER_URL)
+      AZDO_PAT:           $(AZDO_PAT)
+      AZDO_PUBLISHER:     $(AZDO_PUBLISHER)
+      AZDO_EXTENSION_ID:  $(AZDO_EXTENSION_ID)
+      SMTP_HOST:          $(SMTP_HOST)
+      SMTP_PORT:          $(SMTP_PORT)
+      SMTP_FROM:          $(SMTP_FROM)
+      SMTP_SECURE:        $(SMTP_SECURE)
+      SMTP_USER:          $(SMTP_USER)
+      SMTP_PASS:          $(SMTP_PASS)
+      DRY_RUN:            $(DRY_RUN)

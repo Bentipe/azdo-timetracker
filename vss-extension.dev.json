@@ -62,6 +62,18 @@
         "uri": "src/time-report.html",
         "icon": "static/icon.png"
       }
+    },
+    {
+      "id": "notification-settings-hub",
+      "type": "ms.vss-web.hub",
+      "targets": [
+        "ms.vss-work-web.work-hub-group"
+      ],
+      "properties": {
+        "name": "Notification Settings (DEV)",
+        "uri": "src/notification-settings.html",
+        "icon": "static/icon.png"
+      }
     }
   ],
   "scopes": [

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Notification Settings</title>
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <style>
+    html, body {
+      height: 100vh;
+      margin: 0;
+      overflow: auto;
+    }
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px;
+      padding: 20px;
+      background: #faf9f8;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin: 0 0 6px 0;
+      color: #323130;
+      font-weight: 600;
+    }
+    .subtitle {
+      color: #605e5c;
+      margin: 0 0 20px 0;
+      font-size: 13px;
+    }
+    .card {
+      background: white;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    h2 {
+      margin: 0 0 16px 0;
+      color: #323130;
+      font-weight: 600;
+      font-size: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead tr {
+      background: #f3f2f1;
+    }
+    th {
+      padding: 10px 12px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 12px;
+      color: #605e5c;
+      border-bottom: 2px solid #edebe9;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edebe9;
+      vertical-align: middle;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: #f9f8f7;
+    }
+    input[type="text"] {
+      padding: 5px 8px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      font-size: 13px;
+      width: 100%;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+    input[type="text"]:focus {
+      border-color: #0078d4;
+      outline: none;
+    }
+    .toggle-cell {
+      text-align: center;
+    }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: #0078d4;
+    }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 20px;
+    }
+    button {
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background-color: #106ebe;
+    }
+    button:disabled {
+      background-color: #c8c6c4;
+      cursor: not-allowed;
+    }
+    .status {
+      font-size: 13px;
+    }
+    .status.success {
+      color: #107c10;
+    }
+    .status.error {
+      color: #d13438;
+    }
+    .loading-msg {
+      color: #605e5c;
+      padding: 20px 0;
+    }
+    .info-box {
+      background: #deecf9;
+      border-left: 4px solid #0078d4;
+      padding: 10px 14px;
+      border-radius: 2px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #004578;
+      line-height: 1.5;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #605e5c;
+    }
+    .col-name  { width: 200px; }
+    .col-email { width: 240px; }
+    .col-send  { width: 110px; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <h1>Notification Settings</h1>
+  <p class="subtitle">Configure weekly hour summary emails — sent every Monday morning.</p>
+
+  <div class="info-box">
+    Only users who have logged at least one hour appear in this list.
+    The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
+    The email contains a day-by-day breakdown for the previous week plus a total.
+  </div>
+
+  <div class="card">
+    <h2>User Notification Configuration</h2>
+
+    <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
+
+    <div id="tableContainer" style="display:none">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-name">Name</th>
+            <th class="col-email">Email</th>
+            <th class="col-send">Send Email</th>
+            <th>CC &mdash; manager(s), comma-separated</th>
+          </tr>
+        </thead>
+        <tbody id="userTableBody"></tbody>
+      </table>
+    </div>
+
+    <div id="emptyState" class="empty-state" style="display:none">
+      No users found. Users appear here once they have logged at least one hour.
+    </div>
+
+    <div class="btn-row">
+      <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
+      <span id="statusMsg" class="status"></span>
+    </div>
+  </div>
+
+  <script>
+    var CONFIG_KEY = 'notification-config';
+    var STORAGE_KEY_PREFIX = 'timetracker_';
+
+    // userId -> { userId, userName, userEmail }
+    var knownUsers = {};
+    // userId -> { emailEnabled, cc }
+    var savedConfig = {};
+
+    function initializeExtension() {
+      if (typeof VSS === 'undefined') {
+        setTimeout(initializeExtension, 50);
+        return;
+      }
+      VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
+      VSS.ready(function() {
+        VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
+          window.dataService = dataService;
+          loadData().then(function() {
+            VSS.notifyLoadSucceeded();
+          }).catch(function(err) {
+            console.error('[NotificationSettings] Load error:', err);
+            VSS.notifyLoadSucceeded();
+          });
+        });
+      });
+    }
+
+    function getRecentMonthKeys() {
+      var keys = [];
+      var d = new Date();
+      for (var i = 0; i < 3; i++) {
+        var y = d.getFullYear();
+        var m = String(d.getMonth() + 1).padStart(2, '0');
+        keys.push(STORAGE_KEY_PREFIX + y + '_' + m);
+        d.setMonth(d.getMonth() - 1);
+      }
+      return keys;
+    }
+
+    function loadData() {
+      var monthKeys = getRecentMonthKeys();
+
+      var entryPromises = monthKeys.map(function(key) {
+        return window.dataService.getValue(key, { scopeType: 'Default' })
+          .then(function(data) { return data || []; })
+          .catch(function() { return []; });
+      });
+
+      var configPromise = window.dataService.getValue(CONFIG_KEY, { scopeType: 'Default' })
+        .then(function(cfg) { return cfg || { users: [] }; })
+        .catch(function() { return { users: [] }; });
+
+      return Promise.all([Promise.all(entryPromises), configPromise]).then(function(results) {
+        var allEntries = [].concat.apply([], results[0]);
+        var config = results[1];
+
+        allEntries.forEach(function(e) {
+          if (e.userId && !knownUsers[e.userId]) {
+            knownUsers[e.userId] = { userId: e.userId, userName: e.userName || '', userEmail: e.userEmail || '' };
+          }
+        });
+
+        (config.users || []).forEach(function(u) {
+          savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '' };
+        });
+
+        renderTable();
+      });
+    }
+
+    function renderTable() {
+      document.getElementById('loadingMsg').style.display = 'none';
+
+      var users = Object.keys(knownUsers).map(function(k) { return knownUsers[k]; });
+      users.sort(function(a, b) { return (a.userName || '').localeCompare(b.userName || ''); });
+
+      if (users.length === 0) {
+        document.getElementById('emptyState').style.display = 'block';
+        document.getElementById('saveBtn').disabled = false;
+        return;
+      }
+
+      var tbody = document.getElementById('userTableBody');
+      tbody.innerHTML = '';
+
+      users.forEach(function(u) {
+        var cfg = savedConfig[u.userId] || { emailEnabled: false, cc: '' };
+        var uid = escHtml(u.userId);
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escHtml(u.userName) + '</td>' +
+          '<td style="color:#605e5c">' + escHtml(u.userEmail) + '</td>' +
+          '<td class="toggle-cell">' +
+            '<input type="checkbox" id="chk_' + uid + '" data-uid="' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '>' +
+          '</td>' +
+          '<td>' +
+            '<input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com">' +
+          '</td>';
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('tableContainer').style.display = 'block';
+      document.getElementById('saveBtn').disabled = false;
+    }
+
+    function saveConfig() {
+      var btn = document.getElementById('saveBtn');
+      var status = document.getElementById('statusMsg');
+      btn.disabled = true;
+      status.className = 'status';
+      status.textContent = 'Saving…';
+
+      var users = Object.keys(knownUsers).map(function(k) {
+        var u = knownUsers[k];
+        var chk = document.getElementById('chk_' + u.userId);
+        var ccInput = document.getElementById('cc_' + u.userId);
+        return {
+          userId: u.userId,
+          userName: u.userName,
+          userEmail: u.userEmail,
+          emailEnabled: chk ? chk.checked : false,
+          cc: ccInput ? ccInput.value.trim() : ''
+        };
+      });
+
+      window.dataService.setValue(CONFIG_KEY, { users: users }, { scopeType: 'Default' })
+        .then(function() {
+          status.className = 'status success';
+          status.textContent = 'Saved successfully.';
+          btn.disabled = false;
+        })
+        .catch(function(err) {
+          status.className = 'status error';
+          status.textContent = 'Error: ' + (err.message || String(err));
+          btn.disabled = false;
+        });
+    }
+
+    function escHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    initializeExtension();
+  </script>
+
+</body>
+</html>
