@@ -85,20 +85,31 @@
 
   <script>
     function applyDevOpsTheme() {
-      // Azure DevOps Server 2022 always returns "default" from globalization.theme,
-      // so we rely on prefers-color-scheme (set by the inline script in <head>).
-      // The VSS check only overrides if the theme name is explicitly "dark" or "light".
       function applyIfExplicit(t) {
         if (!t) return false;
         if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
         if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
-        return false; // "default" or anything else — leave prefers-color-scheme result
+        return false;
       }
       var t = '';
       try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
       try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
       try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
       if (applyIfExplicit(t)) return;
+      // On-premise Azure DevOps Server is same-origin — read the host page background
+      // as the ground truth for the active theme. Cross-origin throws; caught silently.
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
       try {
         VSS.require(['VSS/Context'], function(Ctx) {
           try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
@@ -124,6 +135,7 @@
       VSS.ready(function() {
         VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
           window.dataService = dataService;
+          try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
           VSS.notifyLoadSucceeded();
           checkIsAdmin().then(function(isAdmin) {
             document.getElementById('checkingAdmin').style.display = 'none';

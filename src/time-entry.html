@@ -68,6 +68,20 @@
       try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
       try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
       if (applyIfExplicit(t)) return;
+      // On-premise Azure DevOps Server is same-origin — read the host page background
+      // as the ground truth for the active theme. Cross-origin throws; caught silently.
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
       try {
         VSS.require(['VSS/Context'], function(Ctx) {
           try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
@@ -119,6 +133,13 @@
           VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
             console.log("[TimeTracker] Got extension data service");
             window.dataService = dataService;
+            // Theme detection is blocked in sandboxed work-item-form iframes.
+            // Hub pages (time-report, notification-settings) save the detected theme
+            // to ExtensionData; read it here and apply it.
+            dataService.getValue('user-theme', { scopeType: 'User' }).then(function(t) {
+              if (t === 'dark')  document.documentElement.classList.add('dark');
+              if (t === 'light') document.documentElement.classList.remove('dark');
+            }, function() {});
 
             var webContext = VSS.getWebContext();
             currentUser = webContext.user;
