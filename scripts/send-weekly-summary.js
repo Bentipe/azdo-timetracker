@@ -40,7 +40,8 @@ const SMTP_FROM        = process.env.SMTP_FROM         || '';
 const SMTP_SECURE      = process.env.SMTP_SECURE === 'true';
 const SMTP_USER        = process.env.SMTP_USER         || null;
 const SMTP_PASS        = process.env.SMTP_PASS         || null;
-const DRY_RUN          = process.env.DRY_RUN === 'true';
+const DRY_RUN             = process.env.DRY_RUN === 'true';
+const OVERRIDE_WEEK_START = process.env.OVERRIDE_WEEK_START || '';
 
 const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
 
@@ -239,7 +240,20 @@ async function main() {
 
   if (DRY_RUN) console.log('[DRY RUN] No emails will be sent.');
 
-  const { start, end } = getLastWeekRange();
+  let { start, end } = getLastWeekRange();
+
+  if (OVERRIDE_WEEK_START) {
+    // Allow testing with any specific week: set override_week_start to a Monday (YYYY-MM-DD)
+    start = new Date(OVERRIDE_WEEK_START + 'T00:00:00');
+    if (isNaN(start.getTime())) {
+      console.error(`Invalid OVERRIDE_WEEK_START date: "${OVERRIDE_WEEK_START}". Use YYYY-MM-DD format.`);
+      process.exit(1);
+    }
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    console.log(`[OVERRIDE] Using specified week instead of last week.`);
+  }
+
   const startStr = toDateStr(start);
   const endStr   = toDateStr(end);
   console.log(`Processing week: ${startStr} → ${endStr}`);

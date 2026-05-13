@@ -1,22 +1,33 @@
 # Weekly Hour Summary Emails
 #
-# Runs every Monday at 10:00 AM (UTC). Adjust the cron expression below if
-# your server timezone differs — Azure DevOps Server schedules in UTC.
-# Example: UTC+2 → use "0 8 * * 1" to fire at 10:00 local time.
+# Scheduled: every Monday at 10:00 UTC. To match a different local time adjust
+# the cron — example for UTC+2: "0 8 * * 1" fires at 10:00 Amsterdam time.
 #
-# Pipeline variables to configure (mark secrets as Secret in the UI):
-#
-#   AZDO_SERVER_URL    https://devops.yourcompany.com/YourCollection
-#   AZDO_PAT           Personal Access Token — needs vso.extension.data scope  [SECRET]
-#   AZDO_PUBLISHER     miguelnicolas                         (can leave default)
-#   AZDO_EXTENSION_ID  timetracker-extension                 (can leave default)
-#   SMTP_HOST          your-mail-relay.company.com
+# ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
+#   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
+#   AZDO_PAT           Personal Access Token — vso.extension.data scope  [SECRET]
+#   AZDO_PUBLISHER     miguelnicolas                    (default, change if forked)
+#   AZDO_EXTENSION_ID  timetracker-extension            (default, use -dev for dev)
+#   SMTP_HOST          mail-relay.yourcompany.com
 #   SMTP_FROM          timetracker@yourcompany.com
-#   SMTP_PORT          25                                    (optional, default 25)
-#   SMTP_SECURE        false                                 (optional, set true for TLS)
-#   SMTP_USER                                               (optional, leave empty for relay)
-#   SMTP_PASS                                               (optional)                [SECRET]
-#   DRY_RUN            false   set to true to log output without sending emails
+#   SMTP_PORT          25                               (optional)
+#   SMTP_SECURE        false                            (optional, true for TLS)
+#   SMTP_USER                                          (optional, for SMTP auth)
+#   SMTP_PASS                                          (optional)               [SECRET]
+#
+# ── Runtime parameters (set when triggering manually for testing) ─────────────
+#   override_week_start   Monday date YYYY-MM-DD  — use any past week for testing
+#   dry_run               true                    — log output, do NOT send emails
+
+parameters:
+  - name: override_week_start
+    type: string
+    default: ''
+    displayName: 'Override week start (YYYY-MM-DD, leave empty for last week)'
+  - name: dry_run
+    type: boolean
+    default: false
+    displayName: 'Dry run (log only, do not send emails)'
 
 schedules:
   - cron: "0 10 * * 1"
@@ -45,14 +56,15 @@ steps:
     displayName: Send weekly hour summary emails
     workingDirectory: $(Build.SourcesDirectory)/scripts
     env:
-      AZDO_SERVER_URL:    $(AZDO_SERVER_URL)
-      AZDO_PAT:           $(AZDO_PAT)
-      AZDO_PUBLISHER:     $(AZDO_PUBLISHER)
-      AZDO_EXTENSION_ID:  $(AZDO_EXTENSION_ID)
-      SMTP_HOST:          $(SMTP_HOST)
-      SMTP_PORT:          $(SMTP_PORT)
-      SMTP_FROM:          $(SMTP_FROM)
-      SMTP_SECURE:        $(SMTP_SECURE)
-      SMTP_USER:          $(SMTP_USER)
-      SMTP_PASS:          $(SMTP_PASS)
-      DRY_RUN:            $(DRY_RUN)
+      AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
+      AZDO_PAT:               $(AZDO_PAT)
+      AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
+      AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
+      SMTP_HOST:              $(SMTP_HOST)
+      SMTP_PORT:              $(SMTP_PORT)
+      SMTP_FROM:              $(SMTP_FROM)
+      SMTP_SECURE:            $(SMTP_SECURE)
+      SMTP_USER:              $(SMTP_USER)
+      SMTP_PASS:              $(SMTP_PASS)
+      OVERRIDE_WEEK_START:    ${{ parameters.override_week_start }}
+      DRY_RUN:                ${{ parameters.dry_run }}

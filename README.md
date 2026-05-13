@@ -35,6 +35,15 @@ When logging time on a Task or Bug, the extension automatically inherits missing
 
 This means you only need to set Tags, Project, and Client on your User Stories or Epics - all child work items will inherit these values automatically.
 
+### Weekly Email Summaries
+
+Sends each team member a weekly email with their day-by-day hour breakdown and total. Managers can be CC'd per person.
+
+- Configured via **Boards > Notification Settings** (Project Administrators only)
+- Delivered by an Azure DevOps pipeline on a configurable schedule
+- Zero-hour days are highlighted; days with no entries show as —
+- Users who have never logged hours are not emailed
+
 ### Time Reports (Hub)
 - Filter by date range, user, epic, project, client, and tags
 - Summary cards showing total hours, entries, users, and work items
@@ -97,6 +106,60 @@ This means you only need to set Tags, Project, and Client on your User Stories o
 3. Switch between different views (All Entries, By User, By Epic, By Tag)
 4. Click "Export CSV" to download the data
 
+## Weekly Email Summaries — Setup
+
+The email feature runs as a scheduled Azure DevOps pipeline. It reads time data and notification config directly from the Extension Data service — no extra backend required.
+
+### 1. Configure recipients (Notification Settings)
+
+1. Go to **Boards > Notification Settings** (only visible to Project Administrators)
+2. For each user, toggle **Send Email** on or off
+3. Add manager email(s) in the **CC** field (comma-separated for multiple)
+4. Set the **Send on** day and **At** time (informational — see step 2 for the actual schedule)
+5. Click **Save**
+
+### 2. Create the pipeline
+
+1. In Azure DevOps go to **Pipelines → New pipeline**
+2. Choose **Azure Repos Git** → select this repository
+3. Choose **Existing Azure Pipelines YAML file** → select `/pipelines/weekly-summary.yml`
+4. Click **Save** (do not run yet)
+
+### 3. Set pipeline variables
+
+In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**.
+
+| Variable | Example | Secret |
+|----------|---------|--------|
+| `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
+| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope)_ | ✓ |
+| `SMTP_HOST` | `mail-relay.company.com` | |
+| `SMTP_FROM` | `timetracker@company.com` | |
+| `SMTP_PORT` | `25` _(optional, default 25)_ | |
+| `SMTP_SECURE` | `false` _(optional, `true` for TLS)_ | |
+| `SMTP_USER` | _(optional, only if SMTP requires auth)_ | |
+| `SMTP_PASS` | _(optional)_ | ✓ |
+
+> **PAT scope**: when creating the token in Azure DevOps, enable **Extensions → Read** (this covers `vso.extension.data`).
+
+### 4. Adjust the send schedule
+
+The pipeline ships with a Monday 10:00 UTC schedule. If your team is in a different timezone, edit the cron in `pipelines/weekly-summary.yml`:
+
+```yaml
+schedules:
+  - cron: "0 8 * * 1"   # UTC+2 → fires at 10:00 Amsterdam time
+```
+
+### Testing
+
+Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
+
+| Parameter | Value |
+|-----------|-------|
+| `override_week_start` | Any past Monday, e.g. `2026-05-06` |
+| `dry_run` | `true` — logs output without sending any emails |
+
 ## Optional: Custom Fields for Project/Client Tracking
 
 The extension can optionally use custom fields to track **Project** and **Client** for each time entry. This is useful for agencies or teams working on multiple projects/clients.
@@ -149,13 +212,20 @@ tfx extension create --manifest-globs vss-extension.json --rev-version
 
 ```
 azdo-timetracker/
-├── vss-extension.json    # Extension manifest
-├── README.md             # This file
+├── vss-extension.json           # Extension manifest (production)
+├── vss-extension.dev.json       # Extension manifest (development)
+├── README.md
 ├── src/
-│   ├── time-entry.html   # Work item form page
-│   └── time-report.html  # Reports hub
+│   ├── time-entry.html          # Work item form page
+│   ├── time-report.html         # Reports hub
+│   └── notification-settings.html  # Admin page — email notification config
+├── scripts/
+│   ├── package.json             # Dependencies for the pipeline script
+│   └── send-weekly-summary.js  # Pipeline script — reads config, sends emails
+├── pipelines/
+│   └── weekly-summary.yml      # Scheduled pipeline (Monday 10:00 UTC)
 └── static/
-    └── icon.png          # Extension icon (add your own)
+    └── icon.png                 # Extension icon
 ```
 
 ## License

@@ -17,16 +17,8 @@
       background: #faf9f8;
       box-sizing: border-box;
     }
-    h1 {
-      margin: 0 0 6px 0;
-      color: #323130;
-      font-weight: 600;
-    }
-    .subtitle {
-      color: #605e5c;
-      margin: 0 0 20px 0;
-      font-size: 13px;
-    }
+    h1 { margin: 0 0 6px 0; color: #323130; font-weight: 600; }
+    .subtitle { color: #605e5c; margin: 0 0 20px 0; font-size: 13px; }
     .card {
       background: white;
       border-radius: 4px;
@@ -34,19 +26,9 @@
       padding: 20px;
       margin-bottom: 20px;
     }
-    h2 {
-      margin: 0 0 16px 0;
-      color: #323130;
-      font-weight: 600;
-      font-size: 16px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    thead tr {
-      background: #f3f2f1;
-    }
+    h2 { margin: 0 0 16px 0; color: #323130; font-weight: 600; font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { background: #f3f2f1; }
     th {
       padding: 10px 12px;
       text-align: left;
@@ -55,45 +37,21 @@
       color: #605e5c;
       border-bottom: 2px solid #edebe9;
     }
-    td {
-      padding: 10px 12px;
-      border-bottom: 1px solid #edebe9;
-      vertical-align: middle;
-    }
-    tr:last-child td {
-      border-bottom: none;
-    }
-    tr:hover td {
-      background: #f9f8f7;
-    }
-    input[type="text"] {
+    td { padding: 10px 12px; border-bottom: 1px solid #edebe9; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f9f8f7; }
+    input[type="text"], input[type="time"], select {
       padding: 5px 8px;
       border: 1px solid #8a8886;
       border-radius: 2px;
       font-size: 13px;
-      width: 100%;
-      box-sizing: border-box;
       font-family: inherit;
     }
-    input[type="text"]:focus {
-      border-color: #0078d4;
-      outline: none;
-    }
-    .toggle-cell {
-      text-align: center;
-    }
-    input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      cursor: pointer;
-      accent-color: #0078d4;
-    }
-    .btn-row {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      margin-top: 20px;
-    }
+    input[type="text"] { width: 100%; box-sizing: border-box; }
+    input:focus, select:focus { border-color: #0078d4; outline: none; }
+    .toggle-cell { text-align: center; }
+    input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #0078d4; }
+    .btn-row { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
     button {
       background-color: #0078d4;
       color: white;
@@ -103,26 +61,12 @@
       cursor: pointer;
       font-size: 14px;
     }
-    button:hover {
-      background-color: #106ebe;
-    }
-    button:disabled {
-      background-color: #c8c6c4;
-      cursor: not-allowed;
-    }
-    .status {
-      font-size: 13px;
-    }
-    .status.success {
-      color: #107c10;
-    }
-    .status.error {
-      color: #d13438;
-    }
-    .loading-msg {
-      color: #605e5c;
-      padding: 20px 0;
-    }
+    button:hover { background-color: #106ebe; }
+    button:disabled { background-color: #c8c6c4; cursor: not-allowed; }
+    .status { font-size: 13px; }
+    .status.success { color: #107c10; }
+    .status.error { color: #d13438; }
+    .loading-msg { color: #605e5c; padding: 20px 0; }
     .info-box {
       background: #deecf9;
       border-left: 4px solid #0078d4;
@@ -133,82 +77,195 @@
       color: #004578;
       line-height: 1.5;
     }
-    .empty-state {
-      text-align: center;
-      padding: 40px;
-      color: #605e5c;
+    .warn-box {
+      background: #fff4ce;
+      border-left: 4px solid #f7b500;
+      padding: 10px 14px;
+      border-radius: 2px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #323130;
+      line-height: 1.5;
     }
+    .error-box {
+      background: #fde7e9;
+      border-left: 4px solid #d13438;
+      padding: 10px 14px;
+      border-radius: 2px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #323130;
+    }
+    .empty-state { text-align: center; padding: 40px; color: #605e5c; }
     .col-name  { width: 200px; }
     .col-email { width: 240px; }
     .col-send  { width: 110px; text-align: center; }
+    .schedule-row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+    .schedule-group { display: flex; flex-direction: column; gap: 4px; }
+    .schedule-group label { font-weight: 600; font-size: 12px; color: #605e5c; }
+    .note { font-size: 12px; color: #605e5c; margin: 12px 0 0 0; line-height: 1.5; }
+    .note code { background: #f3f2f1; padding: 1px 4px; border-radius: 2px; font-size: 11px; }
+    #accessDenied { display: none; }
+    #mainContent  { display: none; }
+    #checkingAdmin { color: #605e5c; margin-bottom: 20px; }
   </style>
 </head>
 <body>
 
   <h1>Notification Settings</h1>
-  <p class="subtitle">Configure weekly hour summary emails — sent every Monday morning.</p>
+  <p id="subtitle" class="subtitle">Configure weekly hour summary emails.</p>
 
-  <div class="info-box">
-    Only users who have logged at least one hour appear in this list.
-    The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
-    The email contains a day-by-day breakdown for the previous week plus a total.
+  <div id="checkingAdmin">Checking permissions&hellip;</div>
+
+  <div id="accessDenied">
+    <div class="error-box">
+      <strong>Access denied.</strong> This page is only available to Project Administrators.
+      Contact a project admin to configure notification settings.
+    </div>
   </div>
 
-  <div class="card">
-    <h2>User Notification Configuration</h2>
-
-    <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
-
-    <div id="tableContainer" style="display:none">
-      <table>
-        <thead>
-          <tr>
-            <th class="col-name">Name</th>
-            <th class="col-email">Email</th>
-            <th class="col-send">Send Email</th>
-            <th>CC &mdash; manager(s), comma-separated</th>
-          </tr>
-        </thead>
-        <tbody id="userTableBody"></tbody>
-      </table>
+  <div id="mainContent">
+    <div class="info-box">
+      Only users who have logged at least one hour appear in this list.
+      The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
     </div>
 
-    <div id="emptyState" class="empty-state" style="display:none">
-      No users found. Users appear here once they have logged at least one hour.
+    <!-- Schedule -->
+    <div class="card">
+      <h2>Schedule</h2>
+      <div class="schedule-row">
+        <div class="schedule-group">
+          <label for="scheduleDay">Send on</label>
+          <select id="scheduleDay">
+            <option value="1">Monday</option>
+            <option value="2">Tuesday</option>
+            <option value="3">Wednesday</option>
+            <option value="4">Thursday</option>
+            <option value="5">Friday</option>
+            <option value="6">Saturday</option>
+            <option value="0">Sunday</option>
+          </select>
+        </div>
+        <div class="schedule-group">
+          <label for="scheduleTime">At (local time)</label>
+          <input type="time" id="scheduleTime" value="10:00">
+        </div>
+      </div>
+      <p class="note">
+        Stored for reference. The pipeline cron in <code>pipelines/weekly-summary.yml</code> controls the actual timing.<br>
+        To <strong>test</strong>: run the pipeline manually in Azure DevOps and set the
+        <code>override_week_start</code> parameter to any Monday (YYYY-MM-DD).
+      </p>
     </div>
 
-    <div class="btn-row">
-      <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
-      <span id="statusMsg" class="status"></span>
+    <!-- Users -->
+    <div class="card">
+      <h2>User Notification Configuration</h2>
+      <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
+      <div id="tableContainer" style="display:none">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name">Name</th>
+              <th class="col-email">Email</th>
+              <th class="col-send">Send Email</th>
+              <th>CC &mdash; manager(s), comma-separated</th>
+            </tr>
+          </thead>
+          <tbody id="userTableBody"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty-state" style="display:none">
+        No users found. Users appear here once they have logged at least one hour.
+      </div>
+      <div class="btn-row">
+        <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
+        <span id="statusMsg" class="status"></span>
+      </div>
     </div>
   </div>
 
   <script>
     var CONFIG_KEY = 'notification-config';
     var STORAGE_KEY_PREFIX = 'timetracker_';
+    var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-    // userId -> { userId, userName, userEmail }
-    var knownUsers = {};
-    // userId -> { emailEnabled, cc }
-    var savedConfig = {};
+    var knownUsers = {};  // userId -> { userId, userName, userEmail }
+    var savedConfig = {}; // userId -> { emailEnabled, cc }
+
+    // -------------------------------------------------------------------------
+    // VSS init
+    // -------------------------------------------------------------------------
 
     function initializeExtension() {
-      if (typeof VSS === 'undefined') {
-        setTimeout(initializeExtension, 50);
-        return;
-      }
+      if (typeof VSS === 'undefined') { setTimeout(initializeExtension, 50); return; }
       VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
       VSS.ready(function() {
         VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
           window.dataService = dataService;
           VSS.notifyLoadSucceeded();
-          loadData().catch(function(err) {
-            console.error('[NotificationSettings] Load error:', err);
-            document.getElementById('loadingMsg').textContent = 'Error loading data: ' + (err.message || err);
+          checkIsAdmin().then(function(isAdmin) {
+            document.getElementById('checkingAdmin').style.display = 'none';
+            if (!isAdmin) {
+              document.getElementById('accessDenied').style.display = 'block';
+              return;
+            }
+            document.getElementById('mainContent').style.display = 'block';
+            loadData();
           });
+        }, function(err) {
+          console.error('[NotifSettings] Failed to get ExtensionData:', err);
+          document.getElementById('checkingAdmin').textContent = 'Error: could not connect to Extension Data service.';
         });
       });
     }
+
+    // -------------------------------------------------------------------------
+    // Admin check — Project Administrators group membership via Identity API.
+    // Fails open (returns true) if the check cannot be completed, so admins
+    // are never accidentally locked out.
+    // -------------------------------------------------------------------------
+
+    function checkIsAdmin() {
+      var ctx = VSS.getWebContext();
+      var base = ctx.collection.uri.replace(/\/$/, '');
+      var userId = ctx.user.id;
+      var projectName = ctx.project.name;
+
+      var url = base + '/_apis/Identities' +
+                '?subjectTypes=vssgp' +
+                '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
+                '&queryMembership=Direct' +
+                '&api-version=6.0';
+
+      return fetch(url, { credentials: 'include', headers: { 'Accept': 'application/json' } })
+        .then(function(r) {
+          if (!r.ok) { console.warn('[NotifSettings] Admin check HTTP', r.status, '— allowing access'); return true; }
+          return r.json();
+        })
+        .then(function(data) {
+          if (typeof data === 'boolean') return data;
+          if (!data || !data.value || !data.value.length) {
+            console.warn('[NotifSettings] Project Administrators group not found — allowing access');
+            return true;
+          }
+          var members = data.value[0].members || data.value[0].memberIds || [];
+          var isAdmin = members.some(function(m) {
+            var id = typeof m === 'string' ? m : ((m && m.id) || '');
+            return id.toLowerCase() === userId.toLowerCase();
+          });
+          console.log('[NotifSettings] Admin check result:', isAdmin, '| userId:', userId, '| members:', members.length);
+          return isAdmin;
+        })
+        .catch(function(err) {
+          console.warn('[NotifSettings] Admin check error — allowing access:', err);
+          return true;
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Data loading
+    // -------------------------------------------------------------------------
 
     function getRecentMonthKeys() {
       var keys = [];
@@ -222,40 +279,70 @@
       return keys;
     }
 
+    function loadMonthEntries(keys, index, accumulated) {
+      if (index >= keys.length) return Promise.resolve(accumulated);
+      var key = keys[index];
+      console.log('[NotifSettings] Loading:', key);
+      return window.dataService.getValue(key, { scopeType: 'Default' }).then(
+        function(data) {
+          var merged = Array.isArray(data) ? accumulated.concat(data) : accumulated;
+          return loadMonthEntries(keys, index + 1, merged);
+        },
+        function() { return loadMonthEntries(keys, index + 1, accumulated); }
+      );
+    }
+
     function loadData() {
       var monthKeys = getRecentMonthKeys();
+      var rendered = false;
+      var safetyTimer = setTimeout(function() {
+        if (!rendered) { rendered = true; renderTable(); }
+      }, 10000);
 
-      var entryPromises = monthKeys.map(function(key) {
-        return window.dataService.getValue(key, { scopeType: 'Default' })
-          .then(function(data) { return data || []; })
-          .catch(function() { return []; });
-      });
-
-      var configPromise = window.dataService.getValue(CONFIG_KEY, { scopeType: 'Default' })
-        .then(function(cfg) { return cfg || { users: [] }; })
-        .catch(function() { return { users: [] }; });
-
-      return Promise.all([Promise.all(entryPromises), configPromise]).then(function(results) {
-        var allEntries = [].concat.apply([], results[0]);
-        var config = results[1];
-
+      loadMonthEntries(monthKeys, 0, []).then(function(allEntries) {
         allEntries.forEach(function(e) {
-          if (e.userId && !knownUsers[e.userId]) {
+          if (e && e.userId && !knownUsers[e.userId]) {
             knownUsers[e.userId] = { userId: e.userId, userName: e.userName || '', userEmail: e.userEmail || '' };
           }
         });
-
-        (config.users || []).forEach(function(u) {
-          savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '' };
-        });
-
-        renderTable();
+        return window.dataService.getValue(CONFIG_KEY, { scopeType: 'Default' }).then(
+          function(cfg) {
+            if (!cfg) return;
+            ((cfg.users) || []).forEach(function(u) {
+              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '' };
+            });
+            if (cfg.schedule) {
+              document.getElementById('scheduleDay').value  = cfg.schedule.day  !== undefined ? cfg.schedule.day  : 1;
+              document.getElementById('scheduleTime').value = cfg.schedule.time || '10:00';
+            }
+            updateSubtitle(cfg.schedule);
+          },
+          function() {} // no config yet, first run
+        );
+      }).then(function() {
+        if (!rendered) { rendered = true; clearTimeout(safetyTimer); renderTable(); }
+      }, function(err) {
+        if (!rendered) {
+          rendered = true; clearTimeout(safetyTimer);
+          document.getElementById('loadingMsg').textContent = 'Error loading data: ' + (err.message || err);
+        }
       });
     }
 
+    function updateSubtitle(schedule) {
+      var day  = schedule && schedule.day  !== undefined ? schedule.day  : 1;
+      var time = schedule && schedule.time ? schedule.time : '10:00';
+      var dayName = DAY_NAMES[day] || 'Monday';
+      document.getElementById('subtitle').textContent =
+        'Configure weekly hour summary emails — sent every ' + dayName + ' at ' + time + ' (local).';
+    }
+
+    // -------------------------------------------------------------------------
+    // Render
+    // -------------------------------------------------------------------------
+
     function renderTable() {
       document.getElementById('loadingMsg').style.display = 'none';
-
       var users = Object.keys(knownUsers).map(function(k) { return knownUsers[k]; });
       users.sort(function(a, b) { return (a.userName || '').localeCompare(b.userName || ''); });
 
@@ -267,20 +354,15 @@
 
       var tbody = document.getElementById('userTableBody');
       tbody.innerHTML = '';
-
       users.forEach(function(u) {
         var cfg = savedConfig[u.userId] || { emailEnabled: false, cc: '' };
         var uid = escHtml(u.userId);
-        var tr = document.createElement('tr');
+        var tr  = document.createElement('tr');
         tr.innerHTML =
           '<td>' + escHtml(u.userName) + '</td>' +
           '<td style="color:#605e5c">' + escHtml(u.userEmail) + '</td>' +
-          '<td class="toggle-cell">' +
-            '<input type="checkbox" id="chk_' + uid + '" data-uid="' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '>' +
-          '</td>' +
-          '<td>' +
-            '<input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com">' +
-          '</td>';
+          '<td class="toggle-cell"><input type="checkbox" id="chk_' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '></td>' +
+          '<td><input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com"></td>';
         tbody.appendChild(tr);
       });
 
@@ -288,8 +370,12 @@
       document.getElementById('saveBtn').disabled = false;
     }
 
+    // -------------------------------------------------------------------------
+    // Save
+    // -------------------------------------------------------------------------
+
     function saveConfig() {
-      var btn = document.getElementById('saveBtn');
+      var btn    = document.getElementById('saveBtn');
       var status = document.getElementById('statusMsg');
       btn.disabled = true;
       status.className = 'status';
@@ -297,24 +383,27 @@
 
       var users = Object.keys(knownUsers).map(function(k) {
         var u = knownUsers[k];
-        var chk = document.getElementById('chk_' + u.userId);
-        var ccInput = document.getElementById('cc_' + u.userId);
         return {
-          userId: u.userId,
-          userName: u.userName,
-          userEmail: u.userEmail,
-          emailEnabled: chk ? chk.checked : false,
-          cc: ccInput ? ccInput.value.trim() : ''
+          userId:       u.userId,
+          userName:     u.userName,
+          userEmail:    u.userEmail,
+          emailEnabled: !!(document.getElementById('chk_' + u.userId) || {}).checked,
+          cc:           ((document.getElementById('cc_' + u.userId) || {}).value || '').trim()
         };
       });
 
-      window.dataService.setValue(CONFIG_KEY, { users: users }, { scopeType: 'Default' })
+      var schedule = {
+        day:  parseInt(document.getElementById('scheduleDay').value,  10),
+        time: document.getElementById('scheduleTime').value
+      };
+
+      window.dataService.setValue(CONFIG_KEY, { users: users, schedule: schedule }, { scopeType: 'Default' })
         .then(function() {
+          updateSubtitle(schedule);
           status.className = 'status success';
           status.textContent = 'Saved successfully.';
           btn.disabled = false;
-        })
-        .catch(function(err) {
+        }, function(err) {
           status.className = 'status error';
           status.textContent = 'Error: ' + (err.message || String(err));
           btn.disabled = false;
@@ -322,11 +411,7 @@
     }
 
     function escHtml(str) {
-      return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     initializeExtension();
