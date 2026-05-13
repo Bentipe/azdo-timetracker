@@ -68,8 +68,8 @@ steps:
 
       const AZDO_SERVER_URL   = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
       const AZDO_PAT          = process.env.AZDO_PAT          || '';
-      const AZDO_PUBLISHER    = process.env.AZDO_PUBLISHER    || 'miguelnicolas';
-      const AZDO_EXTENSION_ID = process.env.AZDO_EXTENSION_ID || 'timetracker-extension';
+      const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
+      const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
       const SMTP_HOST         = process.env.SMTP_HOST         || '';
       const SMTP_PORT         = parseInt(process.env.SMTP_PORT || '25', 10);
       const SMTP_FROM         = process.env.SMTP_FROM         || '';
@@ -124,7 +124,7 @@ steps:
 
       function extDataBase() {
         return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
-               `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current/Documents`;
+               `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
       }
 
       function fetchJson(url) {
@@ -145,11 +145,15 @@ steps:
         });
       }
 
-      async function fetchDocument(collectionName) {
-        const url = `${extDataBase()}/${collectionName}/${collectionName}?api-version=5.0-preview.1`;
+      async function fetchDocument(collectionName, debug) {
+        // VSS SDK getValue/setValue always uses the $settings built-in collection
+        const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
+        if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
         const doc = await fetchJson(url);
+        if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
         if (!doc) return null;
         if ('__val__' in doc) return doc.__val__;
+        if ('value' in doc) return doc.value;
         const result = {};
         for (const [k, v] of Object.entries(doc)) {
           if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') result[k] = v;
@@ -191,7 +195,9 @@ steps:
         const endStr   = toDateStr(end);
         console.log(`Processing week: ${startStr} -> ${endStr}`);
 
-        const config = await fetchDocument('notification-config');
+        const config = await fetchDocument('notification-config', true);
+        console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
+        console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
         const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
         if (!enabledUsers.length) { console.log('No users have notifications enabled.'); return; }
         console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
@@ -208,7 +214,15 @@ steps:
         const byUser = {};
         weekEntries.forEach(e => { if (!byUser[e.userId]) byUser[e.userId] = []; byUser[e.userId].push(e); });
 
-        const transportOptions = { host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_SECURE };
+        const transportOptions = {
+          host: SMTP_HOST,
+          port: SMTP_PORT,
+          secure: SMTP_SECURE,
+          family: 4,
+          connectionTimeout: 30000,
+          greetingTimeout:   30000,
+          socketTimeout:     30000,
+        };
         if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
         const transporter = nodemailer.createTransport(transportOptions);
 

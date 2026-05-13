@@ -153,7 +153,13 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 | `SMTP_USER` | _(optional, only if SMTP requires auth)_ | |
 | `SMTP_PASS` | _(optional)_ | ✓ |
 
-> **PAT scope**: when creating the token in Azure DevOps, enable **Extensions → Read** (this covers `vso.extension.data`).
+> **Creating the PAT:**
+> 1. Go to **User settings → Personal Access Tokens → New Token**
+> 2. Click **Show all scopes**, then find **Extensions** and tick **Extension Data → Read**
+>    — "Extension Data" is the storage service; "Extensions" (without Data) is for marketplace management and is not needed
+> 3. If you cannot find it, select **Full access** as a fallback
+> 4. Make sure the selected organization/collection matches your `AZDO_SERVER_URL`
+> 5. Copy the generated token into the `AZDO_PAT` pipeline variable and mark it as **Secret**
 
 ### 4. Configure the schedule
 

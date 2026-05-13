@@ -32,8 +32,9 @@ const nodemailer = require('nodemailer');
 
 const AZDO_SERVER_URL  = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
 const AZDO_PAT         = process.env.AZDO_PAT          || '';
-const AZDO_PUBLISHER   = process.env.AZDO_PUBLISHER    || 'miguelnicolas';
-const AZDO_EXTENSION_ID = process.env.AZDO_EXTENSION_ID || 'timetracker-extension';
+// Strip unresolved Azure Pipelines variable syntax "$(VAR)" so JS defaults kick in
+const AZDO_PUBLISHER   = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
+const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
 const SMTP_HOST        = process.env.SMTP_HOST         || '';
 const SMTP_PORT        = parseInt(process.env.SMTP_PORT || '25', 10);
 const SMTP_FROM        = process.env.SMTP_FROM         || '';
@@ -101,7 +102,7 @@ function authHeader() {
 
 function extDataBase() {
   return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
-         `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current/Documents`;
+         `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
 }
 
 function fetchJson(url) {
@@ -134,15 +135,21 @@ function fetchJson(url) {
  * The VSS SDK setValue() stores plain objects spread into the document,
  * and arrays/primitives wrapped in a __val__ property.
  */
-async function fetchDocument(collectionName) {
-  const url = `${extDataBase()}/${collectionName}/${collectionName}?api-version=5.0-preview.1`;
+async function fetchDocument(collectionName, debug) {
+  // VSS SDK getValue/setValue always uses the $settings built-in collection
+  const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
+  if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
   const doc = await fetchJson(url);
+  if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
   if (!doc) return null;
 
-  // Arrays stored via setValue are wrapped in __val__
+  // Arrays/primitives stored via setValue are wrapped in __val__
   if ('__val__' in doc) return doc.__val__;
 
-  // Plain objects are spread into the document — strip the metadata keys
+  // DevOps Server 2022 REST API wraps the payload in a "value" key
+  if ('value' in doc) return doc.value;
+
+  // Fallback: plain objects spread into the document — strip metadata keys
   const result = {};
   for (const [k, v] of Object.entries(doc)) {
     if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') {
@@ -259,7 +266,9 @@ async function main() {
   console.log(`Processing week: ${startStr} → ${endStr}`);
 
   // Load notification config
-  const config = await fetchDocument('notification-config');
+  const config = await fetchDocument('notification-config', true);
+  console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
+  console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
 
   // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
   // Skipped when OVERRIDE_WEEK_START is set (manual test run).
@@ -307,8 +316,16 @@ async function main() {
     byUser[e.userId].push(e);
   });
 
-  // Set up SMTP transport
-  const transportOptions = { host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_SECURE };
+  // Set up SMTP transport (30 s timeouts, IPv4 only — IPv6 may be unreachable on pipeline agents)
+  const transportOptions = {
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    family: 4,
+    connectionTimeout: 30000,
+    greetingTimeout:   30000,
+    socketTimeout:     30000,
+  };
   if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
   const transporter = nodemailer.createTransport(transportOptions);
 
