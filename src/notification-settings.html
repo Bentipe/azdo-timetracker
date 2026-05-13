@@ -201,11 +201,10 @@
       VSS.ready(function() {
         VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
           window.dataService = dataService;
-          loadData().then(function() {
-            VSS.notifyLoadSucceeded();
-          }).catch(function(err) {
+          VSS.notifyLoadSucceeded();
+          loadData().catch(function(err) {
             console.error('[NotificationSettings] Load error:', err);
-            VSS.notifyLoadSucceeded();
+            document.getElementById('loadingMsg').textContent = 'Error loading data: ' + (err.message || err);
           });
         });
       });
