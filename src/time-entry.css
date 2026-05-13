@@ -1,0 +1,101 @@
+html, body { height: 100%; overflow: auto; }
+body { padding: 10px; }
+
+#app { min-width: fit-content; }
+
+.time-entry-form { display: flex; flex-direction: column; gap: 12px; max-width: 400px; }
+
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+
+label { font-weight: 600; color: var(--text-primary); }
+
+input, textarea { padding: 6px 8px; font-size: 14px; }
+
+.time-entries {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.time-entry-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  background: var(--bg-header);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.entry-info { display: flex; flex-direction: column; }
+.entry-user { font-weight: 600; }
+.entry-date { font-size: 12px; color: var(--text-secondary); }
+.entry-hours { font-size: 18px; font-weight: 600; color: var(--accent); }
+.entry-description { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+.total-hours {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--bg-accent-light);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.delete-btn {
+  background: #d13438;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.delete-btn:hover { background: #a4262c; }
+
+.message { padding: 8px; border-radius: 4px; margin-bottom: 12px; }
+.message.success { background: var(--success-bg); color: var(--success-text); }
+.message.error   { background: var(--error-bg);   color: var(--error-text); }
+
+/* Nudge banner */
+.nudge-banner {
+  background: var(--warn-bg);
+  border-left: 4px solid var(--warn-border);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 4px;
+  display: none;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.nudge-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.nudge-title  { font-weight: 600; color: var(--text-primary); font-size: 14px; }
+
+.nudge-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 18px;
+  line-height: 1;
+}
+.nudge-close:hover { color: var(--text-primary); background: rgba(0,0,0,0.05); }
+
+.nudge-content { color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; }
+
+.nudge-quick-add { display: flex; gap: 8px; align-items: flex-end; }
+
+.nudge-input-small { padding: 4px 8px; font-size: 13px; width: 80px; }
+
+.nudge-btn { padding: 6px 12px; font-size: 13px; }
+
+.nudge-btn-secondary {
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-input);
+  padding: 5px 12px;
+}
+.nudge-btn-secondary:hover { background-color: var(--bg-header); color: var(--text-primary); }

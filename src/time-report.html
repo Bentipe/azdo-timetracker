@@ -3,196 +3,10 @@
 <head>
   <meta charset="utf-8">
   <title>Time Reports</title>
+  <script>!function(){if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark')}()</script>
   <script src="../lib/VSS.SDK.min.js"></script>
-  <style>
-    html, body {
-      height: 100vh;
-      margin: 0;
-      overflow: auto;
-    }
-    body {
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      font-size: 14px;
-      padding: 20px;
-      background: #faf9f8;
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-    }
-    h1 {
-      margin: 0 0 20px 0;
-      color: #323130;
-      font-weight: 600;
-      flex-shrink: 0;
-    }
-    .filters {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 16px;
-      margin-bottom: 20px;
-      padding: 16px;
-      background: white;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      flex-shrink: 0;
-    }
-    .filter-group {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .filter-group label {
-      font-weight: 600;
-      font-size: 12px;
-      color: #605e5c;
-    }
-    select, input[type="date"], input[type="text"] {
-      padding: 6px 8px;
-      border: 1px solid #8a8886;
-      border-radius: 2px;
-      font-size: 14px;
-      min-width: 150px;
-    }
-    select:focus, input:focus {
-      border-color: #0078d4;
-      outline: none;
-    }
-    .btn-group {
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-    }
-    button {
-      background-color: #0078d4;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 2px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    button:hover {
-      background-color: #106ebe;
-    }
-    button.secondary {
-      background-color: #f3f2f1;
-      color: #323130;
-      border: 1px solid #8a8886;
-    }
-    button.secondary:hover {
-      background-color: #edebe9;
-    }
-    .summary-cards {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-      flex-shrink: 0;
-    }
-    .summary-card {
-      background: white;
-      padding: 16px 24px;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      min-width: 150px;
-    }
-    .summary-card h3 {
-      margin: 0;
-      font-size: 12px;
-      color: #605e5c;
-      font-weight: 600;
-      text-transform: uppercase;
-    }
-    .summary-card .value {
-      font-size: 32px;
-      font-weight: 600;
-      color: #0078d4;
-      margin-top: 4px;
-    }
-    .summary-card .value small {
-      font-size: 16px;
-      color: #605e5c;
-    }
-    .results-table {
-      background: white;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    th {
-      text-align: left;
-      padding: 12px 16px;
-      background: #f3f2f1;
-      font-weight: 600;
-      font-size: 12px;
-      color: #605e5c;
-      text-transform: uppercase;
-      border-bottom: 1px solid #edebe9;
-    }
-    td {
-      padding: 12px 16px;
-      border-bottom: 1px solid #edebe9;
-      color: #323130;
-    }
-    tr:hover {
-      background: #f3f2f1;
-    }
-    .no-data {
-      padding: 40px;
-      text-align: center;
-      color: #605e5c;
-    }
-    .tag {
-      display: inline-block;
-      background: #e6f2ff;
-      color: #0078d4;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 12px;
-      margin-right: 4px;
-      margin-bottom: 4px;
-    }
-    .group-header {
-      background: #f3f2f1;
-      font-weight: 600;
-    }
-    .group-header td {
-      padding: 8px 16px;
-    }
-    .loading {
-      text-align: center;
-      padding: 40px;
-      color: #605e5c;
-    }
-    .tabs {
-      display: flex;
-      gap: 0;
-      margin-bottom: 20px;
-      border-bottom: 2px solid #edebe9;
-      flex-shrink: 0;
-    }
-    .tab {
-      padding: 12px 24px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -2px;
-      color: #605e5c;
-    }
-    .tab:hover {
-      color: #0078d4;
-    }
-    .tab.active {
-      border-bottom-color: #0078d4;
-      color: #0078d4;
-      font-weight: 600;
-    }
-  </style>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="time-report.css">
 </head>
 <body>
   <h1>Time Reports</h1>
@@ -363,6 +177,10 @@
           explicitNotifyLoaded: true,
           usePlatformScripts: true
         });
+        try {
+          var t = (VSS.getPageContext().globalization.theme || '').toLowerCase();
+          document.documentElement.classList.toggle('dark', t.indexOf('dark') !== -1);
+        } catch(e) {}
       } catch (err) {
         console.error("[TimeReport] VSS.init failed:", err);
         return;
