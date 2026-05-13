@@ -260,6 +260,23 @@ async function main() {
 
   // Load notification config
   const config = await fetchDocument('notification-config');
+
+  // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
+  // Skipped when OVERRIDE_WEEK_START is set (manual test run).
+  if (!OVERRIDE_WEEK_START) {
+    const sched = config && config.schedule;
+    if (sched && sched.utcDay !== undefined && sched.utcHour !== undefined) {
+      const now     = new Date();
+      const curDay  = now.getUTCDay();
+      const curHour = now.getUTCHours();
+      if (curDay !== sched.utcDay || curHour !== sched.utcHour) {
+        console.log(`Not send time. Configured: ${DAY_NAMES[sched.utcDay]} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC. Nothing to do.`);
+        return;
+      }
+      console.log('Schedule matched — proceeding.');
+    }
+  }
+
   const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
 
   if (!enabledUsers.length) {

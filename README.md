@@ -120,10 +120,23 @@ The email feature runs as a scheduled Azure DevOps pipeline. It reads time data 
 
 ### 2. Create the pipeline
 
-1. In Azure DevOps go to **Pipelines → New pipeline**
+The pipeline needs to live in a repository that is hosted in **your** Azure DevOps instance.
+Two options depending on where this extension repo is hosted:
+
+**Option A — Extension repo is in your Azure DevOps** (simplest)
+1. Go to **Pipelines → New pipeline**
 2. Choose **Azure Repos Git** → select this repository
-3. Choose **Existing Azure Pipelines YAML file** → select `/pipelines/weekly-summary.yml`
+3. Choose **Existing Azure Pipelines YAML file** → `/pipelines/weekly-summary.yml`
 4. Click **Save** (do not run yet)
+
+**Option B — Extension repo is hosted elsewhere** (GitHub, different server, etc.)
+Use the self-contained single-file version that embeds the script inside the YAML:
+1. Create a new empty repository in your Azure DevOps (e.g. `timetracker-pipeline`)
+2. Copy **only** `pipelines/weekly-summary-standalone.yml` into it as `pipeline.yml`
+3. Go to **Pipelines → New pipeline** → select that new repo → choose the file
+4. Click **Save** (do not run yet)
+
+> When the script logic changes in a future extension update, copy the new `weekly-summary-standalone.yml` over and commit. The schedule, variables, and parameters stay the same — only the embedded script changes.
 
 ### 3. Set pipeline variables
 
@@ -142,14 +155,11 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 
 > **PAT scope**: when creating the token in Azure DevOps, enable **Extensions → Read** (this covers `vso.extension.data`).
 
-### 4. Adjust the send schedule
+### 4. Configure the schedule
 
-The pipeline ships with a Monday 10:00 UTC schedule. If your team is in a different timezone, edit the cron in `pipelines/weekly-summary.yml`:
+The send day and time are configured entirely from the **Notification Settings** page — no YAML edits needed. The pipeline runs hourly; the script checks the configured day + time and exits immediately if it is not the right moment.
 
-```yaml
-schedules:
-  - cron: "0 8 * * 1"   # UTC+2 → fires at 10:00 Amsterdam time
-```
+The settings page shows the time in your **local browser timezone** and displays the equivalent UTC value for reference.
 
 ### Testing
 
@@ -223,7 +233,8 @@ azdo-timetracker/
 │   ├── package.json             # Dependencies for the pipeline script
 │   └── send-weekly-summary.js  # Pipeline script — reads config, sends emails
 ├── pipelines/
-│   └── weekly-summary.yml      # Scheduled pipeline (Monday 10:00 UTC)
+│   ├── weekly-summary.yml           # Scheduled pipeline — use when repo is in your DevOps
+│   └── weekly-summary-standalone.yml  # Self-contained version — use when repo is elsewhere
 └── static/
     └── icon.png                 # Extension icon
 ```

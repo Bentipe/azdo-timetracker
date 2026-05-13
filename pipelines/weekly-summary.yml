@@ -1,7 +1,8 @@
 # Weekly Hour Summary Emails
 #
-# Scheduled: every Monday at 10:00 UTC. To match a different local time adjust
-# the cron — example for UTC+2: "0 8 * * 1" fires at 10:00 Amsterdam time.
+# Runs every hour. The script reads the send day + time from Notification Settings
+# in the extension and exits immediately if it is not the configured send hour.
+# Change the schedule entirely from the Notification Settings page — no YAML edits needed.
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
 #   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
@@ -30,8 +31,8 @@ parameters:
     displayName: 'Dry run (log only, do not send emails)'
 
 schedules:
-  - cron: "0 10 * * 1"
-    displayName: Monday 10:00 UTC — weekly hour summary
+  - cron: "0 * * * *"
+    displayName: Hourly — script decides whether to send based on Notification Settings
     branches:
       include:
         - main

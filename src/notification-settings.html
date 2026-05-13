@@ -136,7 +136,7 @@
       <div class="schedule-row">
         <div class="schedule-group">
           <label for="scheduleDay">Send on</label>
-          <select id="scheduleDay">
+          <select id="scheduleDay" onchange="updateUtcPreview()">
             <option value="1">Monday</option>
             <option value="2">Tuesday</option>
             <option value="3">Wednesday</option>
@@ -148,13 +148,13 @@
         </div>
         <div class="schedule-group">
           <label for="scheduleTime">At (local time)</label>
-          <input type="time" id="scheduleTime" value="10:00">
+          <input type="time" id="scheduleTime" value="10:00" oninput="updateUtcPreview()">
         </div>
       </div>
+      <p id="utcPreview" class="note" style="color:#0078d4"></p>
       <p class="note">
-        Stored for reference. The pipeline cron in <code>pipelines/weekly-summary.yml</code> controls the actual timing.<br>
-        To <strong>test</strong>: run the pipeline manually in Azure DevOps and set the
-        <code>override_week_start</code> parameter to any Monday (YYYY-MM-DD).
+        The pipeline runs hourly and checks this setting at runtime — no YAML edits needed.<br>
+        To <strong>test</strong>: run the pipeline manually and set <code>override_week_start</code> to any Monday (YYYY-MM-DD).
       </p>
     </div>
 
@@ -315,6 +315,7 @@
               document.getElementById('scheduleDay').value  = cfg.schedule.day  !== undefined ? cfg.schedule.day  : 1;
               document.getElementById('scheduleTime').value = cfg.schedule.time || '10:00';
             }
+            updateUtcPreview();
             updateSubtitle(cfg.schedule);
           },
           function() {} // no config yet, first run
@@ -335,6 +336,40 @@
       var dayName = DAY_NAMES[day] || 'Monday';
       document.getElementById('subtitle').textContent =
         'Configure weekly hour summary emails — sent every ' + dayName + ' at ' + time + ' (local).';
+    }
+
+    // Compute UTC day+hour from the currently selected local day/time and update the preview label.
+    function updateUtcPreview() {
+      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
+      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
+      var localHour = parseInt(timeParts[0], 10) || 0;
+      var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
+
+      // Build a date that falls on the chosen local weekday
+      var d = new Date();
+      var daysUntil = (localDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + daysUntil);
+      d.setHours(localHour, localMin, 0, 0);
+
+      var utcDay  = d.getUTCDay();
+      var utcHour = d.getUTCHours();
+      var utcMin  = d.getUTCMinutes();
+
+      document.getElementById('utcPreview').textContent =
+        'Pipeline will send at: ' + DAY_NAMES[utcDay] + ' ' +
+        String(utcHour).padStart(2, '0') + ':' + String(utcMin).padStart(2, '0') + ' UTC';
+    }
+
+    function computeUtcSchedule() {
+      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
+      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
+      var localHour = parseInt(timeParts[0], 10) || 0;
+      var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
+      var d = new Date();
+      var daysUntil = (localDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + daysUntil);
+      d.setHours(localHour, localMin, 0, 0);
+      return { utcDay: d.getUTCDay(), utcHour: d.getUTCHours() };
     }
 
     // -------------------------------------------------------------------------
@@ -392,9 +427,12 @@
         };
       });
 
+      var utc = computeUtcSchedule();
       var schedule = {
-        day:  parseInt(document.getElementById('scheduleDay').value,  10),
-        time: document.getElementById('scheduleTime').value
+        day:     parseInt(document.getElementById('scheduleDay').value, 10),
+        time:    document.getElementById('scheduleTime').value,
+        utcDay:  utc.utcDay,
+        utcHour: utc.utcHour
       };
 
       window.dataService.setValue(CONFIG_KEY, { users: users, schedule: schedule }, { scopeType: 'Default' })
@@ -415,6 +453,7 @@
     }
 
     initializeExtension();
+    updateUtcPreview(); // show default preview before VSS loads
   </script>
 
 </body>
