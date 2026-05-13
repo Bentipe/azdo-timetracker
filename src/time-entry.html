@@ -56,6 +56,25 @@
   </div>
 
   <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
+        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
+        return false;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
     console.log("[TimeTracker] Script started");
     let workItemId = null;
     let currentUser = null;
@@ -84,10 +103,7 @@
           explicitNotifyLoaded: true,
           usePlatformScripts: true
         });
-        try {
-          var t = (VSS.getPageContext().globalization.theme || '').toLowerCase();
-          document.documentElement.classList.toggle('dark', t.indexOf('dark') !== -1);
-        } catch(e) {}
+        applyDevOpsTheme();
       } catch (err) {
         console.error("[TimeTracker] VSS.init failed:", err);
         return;
@@ -95,7 +111,6 @@
 
       console.log("[TimeTracker] Waiting for VSS.ready...");
       VSS.ready(function() {
-        console.log("[TimeTracker] VSS.ready callback fired");
         try {
           // Set default date to today
           document.getElementById("date").valueAsDate = new Date();
@@ -463,7 +478,7 @@
 
         if (workItemEntries.length === 0) {
           console.log("[TimeTracker] No entries to display");
-          listEl.innerHTML = "<p style='color: #605e5c;'>No time entries yet.</p>";
+          listEl.innerHTML = "<p class='text-muted'>No time entries yet.</p>";
           totalEl.style.display = "none";
           return;
         }

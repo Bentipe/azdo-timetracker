@@ -37,9 +37,11 @@ input[type="text"] { width: 100%; box-sizing: border-box; }
 
 #utcPreview { color: var(--accent); }
 
-/* Users table — scrollable so the Save button stays in view */
+/* Users table — scrollable so the Save button stays in view.
+   Fixed px (not 100vh calc) because hub iframes auto-size their height,
+   making 100vh equal the full content height rather than the viewport. */
 #tableContainer {
-  max-height: calc(100vh - 420px);
+  max-height: 350px;
   min-height: 80px;
   overflow-y: auto;
 }

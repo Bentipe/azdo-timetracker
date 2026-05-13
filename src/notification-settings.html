@@ -84,6 +84,28 @@
   </div>
 
   <script>
+    function applyDevOpsTheme() {
+      // Azure DevOps Server 2022 always returns "default" from globalization.theme,
+      // so we rely on prefers-color-scheme (set by the inline script in <head>).
+      // The VSS check only overrides if the theme name is explicitly "dark" or "light".
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
+        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
+        return false; // "default" or anything else — leave prefers-color-scheme result
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
     var CONFIG_KEY = 'notification-config';
     var STORAGE_KEY_PREFIX = 'timetracker_';
     var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -98,10 +120,7 @@
     function initializeExtension() {
       if (typeof VSS === 'undefined') { setTimeout(initializeExtension, 50); return; }
       VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
-      try {
-        var t = (VSS.getPageContext().globalization.theme || '').toLowerCase();
-        document.documentElement.classList.toggle('dark', t.indexOf('dark') !== -1);
-      } catch(e) {}
+      applyDevOpsTheme();
       VSS.ready(function() {
         VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
           window.dataService = dataService;
@@ -297,7 +316,7 @@
         var tr  = document.createElement('tr');
         tr.innerHTML =
           '<td>' + escHtml(u.userName) + '</td>' +
-          '<td style="color:#605e5c">' + escHtml(u.userEmail) + '</td>' +
+          '<td class="text-muted">' + escHtml(u.userEmail) + '</td>' +
           '<td class="toggle-cell"><input type="checkbox" id="chk_' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '></td>' +
           '<td><input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com"></td>';
         tbody.appendChild(tr);

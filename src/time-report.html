@@ -97,6 +97,25 @@
   </div>
 
   <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
+        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
+        return false;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
     console.log("[TimeReport] Script started");
     const STORAGE_KEY_PREFIX = "timetracker_";
     const LEGACY_STORAGE_KEY = "timetracker_entries";
@@ -177,10 +196,7 @@
           explicitNotifyLoaded: true,
           usePlatformScripts: true
         });
-        try {
-          var t = (VSS.getPageContext().globalization.theme || '').toLowerCase();
-          document.documentElement.classList.toggle('dark', t.indexOf('dark') !== -1);
-        } catch(e) {}
+        applyDevOpsTheme();
       } catch (err) {
         console.error("[TimeReport] VSS.init failed:", err);
         return;
@@ -527,7 +543,7 @@
         // Show parent (User Story, Feature, etc.) if available and not an Epic
         var parentDisplay = "-";
         if (e.parentTitle && e.parentType && e.parentType !== "Epic") {
-          parentDisplay = escapeHtml(e.parentTitle) + " <small style='color:#605e5c;'>(" + escapeHtml(e.parentType) + ")</small>";
+          parentDisplay = escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>";
         }
 
         return "<tr>" +

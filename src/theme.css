@@ -92,8 +92,8 @@ html.dark {
    ================================================================ */
 html, body {
   margin: 0;
-  background: var(--bg-page);
-  color: var(--text-primary);
+  background: var(--bg-page) !important;
+  color: var(--text-primary) !important;
 }
 
 body {
@@ -106,8 +106,8 @@ body {
    Form controls
    ================================================================ */
 input, textarea, select {
-  background: var(--input-bg);
-  color: var(--text-primary);
+  background: var(--input-bg) !important;
+  color: var(--text-primary) !important;
   border: 1px solid var(--border-input);
   border-radius: 2px;
   font-family: inherit;
@@ -131,8 +131,8 @@ input[type="checkbox"] {
    Buttons
    ================================================================ */
 button {
-  background-color: var(--accent);
-  color: #ffffff;
+  background-color: var(--accent) !important;
+  color: #ffffff !important;
   border: none;
   padding: 8px 20px;
   border-radius: 2px;
@@ -231,6 +231,9 @@ tr:hover td {
   font-size: 13px;
   color: var(--error-text);
 }
+
+/* Utility */
+.text-muted { color: var(--text-secondary); }
 
 /* ================================================================
    Status messages
