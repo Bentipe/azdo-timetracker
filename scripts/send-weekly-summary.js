@@ -322,9 +322,9 @@ async function main() {
     port: SMTP_PORT,
     secure: SMTP_SECURE,
     family: 4,
-    connectionTimeout: 30000,
-    greetingTimeout:   30000,
-    socketTimeout:     30000,
+    connectionTimeout: 60000,
+    greetingTimeout:   60000,
+    socketTimeout:     120000,
   };
   if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
   const transporter = nodemailer.createTransport(transportOptions);
@@ -377,6 +377,12 @@ async function main() {
   console.log(`Done. Sent: ${sent}, Failed: ${failed}.`);
   if (failed > 0) process.exit(1);
 }
+
+const globalTimeout = setTimeout(() => {
+  console.error('Fatal: script timed out after 10 minutes. Check SMTP_HOST connectivity.');
+  process.exit(1);
+}, 600000);
+globalTimeout.unref();
 
 main().catch(err => {
   console.error('Fatal error:', err);
