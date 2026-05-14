@@ -42,7 +42,7 @@ const SMTP_SECURE      = process.env.SMTP_SECURE === 'true';
 const SMTP_USER        = process.env.SMTP_USER         || null;
 const SMTP_PASS        = process.env.SMTP_PASS         || null;
 const DRY_RUN             = process.env.DRY_RUN === 'true';
-const OVERRIDE_WEEK_START = process.env.OVERRIDE_WEEK_START || '';
+const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
 
 const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
 

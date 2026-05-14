@@ -23,7 +23,7 @@
 parameters:
   - name: override_week_start
     type: string
-    default: ''
+    default: 'none'
     displayName: 'Override week start (YYYY-MM-DD, leave empty for last week)'
   - name: dry_run
     type: boolean
@@ -68,5 +68,5 @@ steps:
       SMTP_SECURE:            $(SMTP_SECURE)
       SMTP_USER:              $(SMTP_USER)
       SMTP_PASS:              $(SMTP_PASS)
-      OVERRIDE_WEEK_START:    ${{ parameters.override_week_start }}
+      OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
       DRY_RUN:                ${{ parameters.dry_run }}
