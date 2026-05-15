@@ -137,6 +137,13 @@
     let filteredEntries = [];
     let currentView = "entries";
     var pendingFilters = null;
+    let currentUser = null;
+    var collectionUri = "";
+    var currentProjectName = "";
+    var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+    var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+    var editingEntryId = null;
+    var editingEntryOriginalDate = null;
 
     function parseHashString(hash) {
       if (!hash) return null;
@@ -223,6 +230,12 @@
           VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
             console.log("[TimeReport] Got extension data service");
             window.dataService = dataService;
+            try {
+              var ctx = VSS.getWebContext();
+              currentUser = ctx.user;
+              collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
+              currentProjectName = (ctx.project || {}).name || "";
+            } catch(e) {}
             try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
 
             // Set default date range (last 30 days)
@@ -546,7 +559,7 @@
       var thead = document.getElementById("tableHead");
       var tbody = document.getElementById("tableBody");
 
-      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Parent</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th></tr>";
+      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Parent</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th><th></th></tr>";
 
       var sorted = [...filteredEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -561,15 +574,27 @@
           parentDisplay = escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>";
         }
 
+        var canModify = currentUser && e.userId === currentUser.id;
+        var actionBtns = canModify
+          ? '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
+            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\')">' + DELETE_ICON + '</button>'
+          : '';
+
+        var wiUrl = getWorkItemUrl(e);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer">#' + e.workItemId + '</a>'
+          : '#' + e.workItemId;
+
         return "<tr>" +
           "<td>" + e.date + "</td>" +
           "<td>" + escapeHtml(e.userName) + "</td>" +
-          "<td>" + escapeHtml(e.workItemTitle) + " (#" + e.workItemId + ")</td>" +
+          "<td>" + escapeHtml(e.workItemTitle) + " (" + wiIdLabel + ")</td>" +
           "<td>" + parentDisplay + "</td>" +
           "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
           "<td>" + tags + "</td>" +
           "<td><strong>" + e.hours + "h</strong></td>" +
           "<td>" + (e.description ? escapeHtml(e.description) : "-") + "</td>" +
+          "<td class='actions-cell'>" + actionBtns + "</td>" +
         "</tr>";
       }).join("");
     }
@@ -1089,6 +1114,109 @@
       link.click();
     }
 
+    function getWorkItemUrl(entry) {
+      var base = collectionUri.replace(/\/$/, "");
+      var proj = entry.teamProject || currentProjectName || "";
+      if (!base || !proj) return null;
+      return base + "/" + encodeURIComponent(proj) + "/_workitems/edit/" + entry.workItemId;
+    }
+
+    function deleteEntryById(entryId, entryDate) {
+      var storageKey = getStorageKeyForDate(entryDate);
+      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
+        if (!data || data.length === 0) {
+          throw new Error("No entries found for this month");
+        }
+        var filtered = data.filter(function(e) { return e.id !== entryId; });
+        return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
+      });
+    }
+
+    function deleteEntry(entryId) {
+      if (!confirm("Delete this time entry?")) return;
+      var entry = allEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { alert("Entry not found"); return; }
+      if (!currentUser || entry.userId !== currentUser.id) { alert("You can only delete your own entries"); return; }
+      deleteEntryById(entryId, entry.date).then(function() {
+        loadAllEntries();
+      }, function() {
+        alert("Failed to delete entry");
+      });
+    }
+
+    function editEntry(entryId) {
+      var entry = allEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { alert("Entry not found"); return; }
+      editingEntryId = entryId;
+      editingEntryOriginalDate = entry.date;
+      document.getElementById("editHours").value = entry.hours;
+      document.getElementById("editDate").value = entry.date;
+      document.getElementById("editDescription").value = entry.description || "";
+      document.getElementById("editModal").style.display = "flex";
+    }
+
+    function closeEditModal() {
+      document.getElementById("editModal").style.display = "none";
+      editingEntryId = null;
+      editingEntryOriginalDate = null;
+    }
+
+    function saveEditEntry() {
+      var hours = parseFloat(document.getElementById("editHours").value);
+      var date = document.getElementById("editDate").value;
+      var description = document.getElementById("editDescription").value;
+
+      if (!hours || hours <= 0 || hours > 24) {
+        alert("Please enter valid hours (0.25 - 24)");
+        return;
+      }
+      if (!date) {
+        alert("Please select a date");
+        return;
+      }
+
+      document.getElementById("editSaveBtn").disabled = true;
+
+      var originalKey = getStorageKeyForDate(editingEntryOriginalDate);
+      var newKey = getStorageKeyForDate(date);
+
+      if (originalKey === newKey) {
+        window.dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
+          var updated = (data || []).map(function(e) {
+            if (e.id === editingEntryId) {
+              return Object.assign({}, e, { hours: hours, date: date, description: description });
+            }
+            return e;
+          });
+          return window.dataService.setValue(originalKey, updated, { scopeType: "Default" });
+        }).then(function() {
+          closeEditModal();
+          loadAllEntries();
+        }, function() {
+          alert("Failed to update entry");
+          document.getElementById("editSaveBtn").disabled = false;
+        });
+      } else {
+        var entryToMove = null;
+        window.dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
+          var oldEntries = data || [];
+          entryToMove = oldEntries.find(function(e) { return e.id === editingEntryId; });
+          return window.dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== editingEntryId; }), { scopeType: "Default" });
+        }).then(function() {
+          return window.dataService.getValue(newKey, { scopeType: "Default" });
+        }).then(function(data) {
+          var updatedEntry = Object.assign({}, entryToMove, { hours: hours, date: date, description: description });
+          return window.dataService.setValue(newKey, (data || []).concat([updatedEntry]), { scopeType: "Default" });
+        }).then(function() {
+          closeEditModal();
+          loadAllEntries();
+        }, function() {
+          alert("Failed to update entry");
+          document.getElementById("editSaveBtn").disabled = false;
+        });
+      }
+    }
+
     function escapeHtml(text) {
       if (!text) return "";
       var div = document.createElement("div");
@@ -1096,5 +1224,27 @@
       return div.innerHTML;
     }
   </script>
+
+  <div id="editModal" class="edit-modal-backdrop" style="display:none;">
+    <div class="edit-modal-content">
+      <h3>Edit Time Entry</h3>
+      <div class="filter-group">
+        <label for="editHours">Hours Spent</label>
+        <input type="number" id="editHours" min="0.25" max="24" step="0.25" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
+      </div>
+      <div class="filter-group">
+        <label for="editDate">Date</label>
+        <input type="date" id="editDate">
+      </div>
+      <div class="filter-group">
+        <label for="editDescription">Description (optional, max 100 chars)</label>
+        <textarea id="editDescription" rows="3" maxlength="100" style="resize:vertical;"></textarea>
+      </div>
+      <div class="edit-modal-actions">
+        <button id="editSaveBtn" onclick="saveEditEntry()">Save</button>
+        <button class="secondary" onclick="closeEditModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
