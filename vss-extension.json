@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
   "id": "timetracker-extension",
-  "version": "1.5.5",
+  "version": "1.5.10",
   "name": "Time Tracker",
   "description": "Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
@@ -59,6 +59,18 @@
       "properties": {
         "name": "Time Reports",
         "uri": "src/time-report.html",
+        "icon": "static/icon.png"
+      }
+    },
+    {
+      "id": "notification-settings-hub",
+      "type": "ms.vss-web.hub",
+      "targets": [
+        "ms.vss-work-web.work-hub-group"
+      ],
+      "properties": {
+        "name": "Notification Settings",
+        "uri": "src/notification-settings.html",
         "icon": "static/icon.png"
       }
     }

@@ -3,202 +3,10 @@
 <head>
   <meta charset="utf-8">
   <title>Time Entry</title>
+  <script>!function(){if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark')}()</script>
   <script src="../lib/VSS.SDK.min.js"></script>
-  <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-    }
-    body {
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      font-size: 14px;
-      padding: 10px;
-      overflow: auto;
-      box-sizing: border-box;
-    }
-    #app {
-      min-width: fit-content;
-    }
-    .time-entry-form {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      max-width: 400px;
-    }
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    label {
-      font-weight: 600;
-      color: #323130;
-    }
-    input, textarea {
-      padding: 6px 8px;
-      border: 1px solid #8a8886;
-      border-radius: 2px;
-      font-size: 14px;
-    }
-    input:focus, textarea:focus {
-      border-color: #0078d4;
-      outline: none;
-    }
-    button {
-      background-color: #0078d4;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 2px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    button:hover {
-      background-color: #106ebe;
-    }
-    button:disabled {
-      background-color: #c8c6c4;
-      cursor: not-allowed;
-    }
-    .time-entries {
-      margin-top: 20px;
-      border-top: 1px solid #edebe9;
-      padding-top: 16px;
-    }
-    .time-entry-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px;
-      background: #f3f2f1;
-      border-radius: 4px;
-      margin-bottom: 8px;
-    }
-    .entry-info {
-      display: flex;
-      flex-direction: column;
-    }
-    .entry-user {
-      font-weight: 600;
-    }
-    .entry-date {
-      font-size: 12px;
-      color: #605e5c;
-    }
-    .entry-hours {
-      font-size: 18px;
-      font-weight: 600;
-      color: #0078d4;
-    }
-    .entry-description {
-      font-size: 12px;
-      color: #605e5c;
-      margin-top: 4px;
-    }
-    .total-hours {
-      font-size: 16px;
-      font-weight: 600;
-      margin-top: 12px;
-      padding: 8px;
-      background: #e6f2ff;
-      border-radius: 4px;
-    }
-    .delete-btn {
-      background: #d13438;
-      padding: 4px 8px;
-      font-size: 12px;
-    }
-    .delete-btn:hover {
-      background: #a4262c;
-    }
-    .message {
-      padding: 8px;
-      border-radius: 4px;
-      margin-bottom: 12px;
-    }
-    .message.success {
-      background: #dff6dd;
-      color: #107c10;
-    }
-    .message.error {
-      background: #fde7e9;
-      color: #d13438;
-    }
-    .nudge-banner {
-      background: #fff4ce;
-      border-left: 4px solid #ffb900;
-      padding: 12px 16px;
-      margin-bottom: 16px;
-      border-radius: 4px;
-      display: none;
-      animation: slideDown 0.3s ease-out;
-    }
-    @keyframes slideDown {
-      from {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-    .nudge-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    .nudge-title {
-      font-weight: 600;
-      color: #323130;
-      font-size: 14px;
-    }
-    .nudge-close {
-      background: transparent;
-      border: none;
-      color: #605e5c;
-      cursor: pointer;
-      padding: 2px 6px;
-      font-size: 18px;
-      line-height: 1;
-    }
-    .nudge-close:hover {
-      color: #323130;
-      background: rgba(0,0,0,0.05);
-    }
-    .nudge-content {
-      color: #605e5c;
-      font-size: 13px;
-      margin-bottom: 12px;
-    }
-    .nudge-quick-add {
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-    }
-    .nudge-input-small {
-      padding: 4px 8px;
-      border: 1px solid #8a8886;
-      border-radius: 2px;
-      font-size: 13px;
-      width: 80px;
-    }
-    .nudge-btn {
-      padding: 6px 12px;
-      font-size: 13px;
-    }
-    .nudge-btn-secondary {
-      background-color: transparent;
-      color: #605e5c;
-      border: 1px solid #8a8886;
-      padding: 5px 12px;
-    }
-    .nudge-btn-secondary:hover {
-      background-color: #f3f2f1;
-      color: #323130;
-    }
-  </style>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="time-entry.css">
 </head>
 <body>
   <div id="app">
@@ -248,6 +56,39 @@
   </div>
 
   <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
+        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
+        return false;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      // On-premise Azure DevOps Server is same-origin — read the host page background
+      // as the ground truth for the active theme. Cross-origin throws; caught silently.
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
     console.log("[TimeTracker] Script started");
     let workItemId = null;
     let currentUser = null;
@@ -276,6 +117,7 @@
           explicitNotifyLoaded: true,
           usePlatformScripts: true
         });
+        applyDevOpsTheme();
       } catch (err) {
         console.error("[TimeTracker] VSS.init failed:", err);
         return;
@@ -283,7 +125,6 @@
 
       console.log("[TimeTracker] Waiting for VSS.ready...");
       VSS.ready(function() {
-        console.log("[TimeTracker] VSS.ready callback fired");
         try {
           // Set default date to today
           document.getElementById("date").valueAsDate = new Date();
@@ -292,6 +133,13 @@
           VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
             console.log("[TimeTracker] Got extension data service");
             window.dataService = dataService;
+            // Theme detection is blocked in sandboxed work-item-form iframes.
+            // Hub pages (time-report, notification-settings) save the detected theme
+            // to ExtensionData; read it here and apply it.
+            dataService.getValue('user-theme', { scopeType: 'User' }).then(function(t) {
+              if (t === 'dark')  document.documentElement.classList.add('dark');
+              if (t === 'light') document.documentElement.classList.remove('dark');
+            }, function() {});
 
             var webContext = VSS.getWebContext();
             currentUser = webContext.user;
@@ -651,7 +499,7 @@
 
         if (workItemEntries.length === 0) {
           console.log("[TimeTracker] No entries to display");
-          listEl.innerHTML = "<p style='color: #605e5c;'>No time entries yet.</p>";
+          listEl.innerHTML = "<p class='text-muted'>No time entries yet.</p>";
           totalEl.style.display = "none";
           return;
         }

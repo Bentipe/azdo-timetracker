@@ -1,0 +1,102 @@
+html, body { height: 100vh; overflow: auto; }
+body { padding: 20px; display: flex; flex-direction: column; }
+
+h1 { margin: 0 0 20px 0; font-weight: 600; flex-shrink: 0; }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  flex-shrink: 0;
+}
+
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-weight: 600; font-size: 12px; color: var(--text-secondary); }
+
+select, input[type="date"], input[type="text"] { padding: 6px 8px; font-size: 14px; min-width: 150px; }
+
+.btn-group { display: flex; gap: 8px; align-items: flex-end; }
+
+.summary-cards { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; flex-shrink: 0; }
+
+.summary-card {
+  background: var(--bg-card);
+  padding: 16px 24px;
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  min-width: 150px;
+}
+
+.summary-card h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.summary-card .value { font-size: 32px; font-weight: 600; color: var(--accent); margin-top: 4px; }
+.summary-card .value small { font-size: 16px; color: var(--text-secondary); }
+
+.results-table {
+  background: var(--bg-card);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+th {
+  text-transform: uppercase;
+  font-size: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+td { padding: 12px 16px; color: var(--text-primary); }
+
+.no-data  { padding: 40px; text-align: center; color: var(--text-secondary); }
+.loading  { text-align: center; padding: 40px; color: var(--text-secondary); }
+
+.tag {
+  display: inline-block;
+  background: var(--bg-accent-light);
+  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+
+.group-header { background: var(--bg-header); font-weight: 600; }
+.group-header td { padding: 8px 16px; }
+
+.tabs {
+  display: flex;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 12px 24px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: var(--text-secondary);
+}
+
+.tab:hover { color: var(--accent); }
+
+.tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}

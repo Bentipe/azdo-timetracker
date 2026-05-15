@@ -1,0 +1,86 @@
+/* Hub page fills exactly the iframe viewport — no outer scroll needed */
+html, body {
+  height: 100vh;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+h1 { flex-shrink: 0; margin: 0 0 6px 0; font-weight: 600; }
+.subtitle { flex-shrink: 0; color: var(--text-secondary); margin: 0 0 20px 0; font-size: 13px; }
+
+#checkingAdmin { flex-shrink: 0; color: var(--text-secondary); margin-bottom: 20px; }
+#accessDenied  { display: none; flex-shrink: 0; }
+
+#mainContent {
+  display: none; /* shown as flex by JS */
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.info-box { flex-shrink: 0; }
+
+.card {
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* Users card grows to fill remaining space */
+#usersCard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+#usersCard h2 { flex-shrink: 0; }
+
+h2 { margin: 0 0 16px 0; font-weight: 600; font-size: 16px; }
+
+input[type="text"] { width: 100%; box-sizing: border-box; }
+
+.toggle-cell { text-align: center; }
+
+.loading-msg { flex-shrink: 0; color: var(--text-secondary); padding: 20px 0; }
+.empty-state  { flex: 1; text-align: center; padding: 40px; color: var(--text-secondary); }
+
+/* Table container scrolls; Save button stays below it */
+#tableContainer {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 60px;
+}
+
+.btn-row {
+  flex-shrink: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.col-name  { width: 200px; }
+.col-email { width: 240px; }
+.col-send  { width: 110px; text-align: center; }
+
+.schedule-row  { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+.schedule-group { display: flex; flex-direction: column; gap: 4px; }
+.schedule-group label { font-weight: 600; font-size: 12px; color: var(--text-secondary); }
+
+.note { font-size: 12px; color: var(--text-secondary); margin: 12px 0 0 0; line-height: 1.5; }
+.note code { background: var(--code-bg); padding: 1px 4px; border-radius: 2px; font-size: 11px; }
+
+#utcPreview { color: var(--accent); }

@@ -1,0 +1,10 @@
+{
+  "name": "weekly-summary-sender",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sends weekly hour summary emails from Azure DevOps Time Tracker data.",
+  "main": "send-weekly-summary.js",
+  "dependencies": {
+    "nodemailer": "^6.9.0"
+  }
+}

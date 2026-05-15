@@ -1,0 +1,243 @@
+/* ================================================================
+   CSS custom properties — light (default) and dark themes
+   ================================================================ */
+:root {
+  color-scheme: light;
+
+  --bg-page:         #faf9f8;
+  --bg-card:         #ffffff;
+  --bg-header:       #f3f2f1;
+  --bg-row-hover:    #f9f8f7;
+  --bg-accent-light: #e6f2ff;
+
+  --text-primary:    #323130;
+  --text-secondary:  #605e5c;
+  --text-muted:      #a19f9d;
+
+  --border:          #edebe9;
+  --border-input:    #8a8886;
+
+  --accent:          #0078d4;
+  --accent-hover:    #106ebe;
+
+  --btn-disabled-bg: #c8c6c4;
+  --btn-disabled-fg: #ffffff;
+
+  --info-bg:         #deecf9;
+  --info-border:     #0078d4;
+  --info-text:       #004578;
+
+  --warn-bg:         #fff4ce;
+  --warn-border:     #f7b500;
+  --warn-text:       #323130;
+
+  --error-bg:        #fde7e9;
+  --error-border:    #d13438;
+  --error-text:      #d13438;
+
+  --success-bg:      #dff6dd;
+  --success-text:    #107c10;
+
+  --input-bg:        #ffffff;
+  --code-bg:         #f3f2f1;
+
+  --shadow:          0 1px 3px rgba(0, 0, 0, 0.10);
+}
+
+html.dark {
+  color-scheme: dark;
+
+  --bg-page:         #1b1a19;
+  --bg-card:         #2d2c2b;
+  --bg-header:       #252423;
+  --bg-row-hover:    #333231;
+  --bg-accent-light: #1c3a5c;
+
+  --text-primary:    #e1dfdd;
+  --text-secondary:  #a19f9d;
+  --text-muted:      #797775;
+
+  --border:          #3b3a39;
+  --border-input:    #605e5c;
+
+  --accent:          #2899f5;
+  --accent-hover:    #3aa0f3;
+
+  --btn-disabled-bg: #484644;
+  --btn-disabled-fg: #a19f9d;
+
+  --info-bg:         #1c3a5c;
+  --info-border:     #2899f5;
+  --info-text:       #a9d3f5;
+
+  --warn-bg:         #3d2e00;
+  --warn-border:     #ffb900;
+  --warn-text:       #e1dfdd;
+
+  --error-bg:        #3b0e0e;
+  --error-border:    #d13438;
+  --error-text:      #f9a8a8;
+
+  --success-bg:      #0d2e0d;
+  --success-text:    #92d493;
+
+  --input-bg:        #252423;
+  --code-bg:         #252423;
+
+  --shadow:          0 1px 3px rgba(0, 0, 0, 0.40);
+}
+
+/* ================================================================
+   Base
+   ================================================================ */
+html, body {
+  margin: 0;
+  background: var(--bg-page) !important;
+  color: var(--text-primary) !important;
+}
+
+body {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+/* ================================================================
+   Form controls
+   ================================================================ */
+input, textarea, select {
+  background: var(--input-bg) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-input);
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ================================================================
+   Buttons
+   ================================================================ */
+button {
+  background-color: var(--accent) !important;
+  color: #ffffff !important;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+button:hover {
+  background-color: var(--accent-hover);
+}
+
+button:disabled {
+  background-color: var(--btn-disabled-bg);
+  color: var(--btn-disabled-fg);
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background-color: var(--bg-header);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+}
+
+button.secondary:hover {
+  background-color: var(--border);
+}
+
+/* ================================================================
+   Tables
+   ================================================================ */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead tr {
+  background: var(--bg-header);
+}
+
+th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 2px solid var(--border);
+}
+
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background: var(--bg-row-hover);
+}
+
+/* ================================================================
+   Info / warn / error boxes
+   ================================================================ */
+.info-box {
+  background: var(--info-bg);
+  border-left: 4px solid var(--info-border);
+  padding: 10px 14px;
+  border-radius: 2px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--info-text);
+  line-height: 1.5;
+}
+
+.warn-box {
+  background: var(--warn-bg);
+  border-left: 4px solid var(--warn-border);
+  padding: 10px 14px;
+  border-radius: 2px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--warn-text);
+  line-height: 1.5;
+}
+
+.error-box {
+  background: var(--error-bg);
+  border-left: 4px solid var(--error-border);
+  padding: 10px 14px;
+  border-radius: 2px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--error-text);
+}
+
+/* Utility */
+.text-muted { color: var(--text-secondary); }
+
+/* ================================================================
+   Status messages
+   ================================================================ */
+.status { font-size: 13px; }
+.status.success { color: var(--success-text); }
+.status.error   { color: var(--error-text); }
