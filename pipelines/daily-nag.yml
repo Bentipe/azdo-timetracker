@@ -1,0 +1,72 @@
+# Daily "you forgot to log hours" Slack reminder
+#
+# Runs every weekday (Mon–Fri) at 07:00 UTC. Finds users on the Notification
+# Settings roster who logged ZERO hours for the previous working day and sends
+# each of them a private Slack DM. The Monday run targets the prior Friday.
+#
+# NOTE: the cron below is in UTC. Adjust the hour to your team's working
+# morning expressed in UTC. The Mon–Fri restriction means the job never runs
+# on weekends; the weekend-skipping for the *target* day is handled in code.
+#
+# ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
+#   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
+#   AZDO_PAT           Personal Access Token — vso.extension.data scope  [SECRET]
+#   SLACK_BOT_TOKEN    Slack bot token xoxb-…                            [SECRET]
+#   AZDO_PUBLISHER     miguelnicolas                    (default, change if forked)
+#   AZDO_EXTENSION_ID  timetracker-extension            (default, use -dev for dev)
+#   TIMETRACKER_URL    Link added to the message        (optional)
+#   HOLIDAYS           CSV of YYYY-MM-DD non-working days (optional)
+#   EXCLUDE_EMAILS     CSV of emails to never nag        (optional)
+#
+# ── Runtime parameters (set when triggering manually for testing) ─────────────
+#   override_target_date  YYYY-MM-DD  — check this exact day instead of computing
+#   dry_run               true        — log output, do NOT send Slack messages
+
+parameters:
+  - name: override_target_date
+    type: string
+    default: 'none'
+    displayName: 'Override target date (YYYY-MM-DD, leave as none for auto)'
+  - name: dry_run
+    type: boolean
+    default: false
+    displayName: 'Dry run (log only, do not send Slack messages)'
+
+schedules:
+  - cron: "0 7 * * 1-5"
+    displayName: Weekdays 07:00 UTC — daily missing-hours reminder
+    branches:
+      include:
+        - main
+        - master
+    always: true
+
+trigger: none
+
+pool:
+  name: Default   # your self-hosted agent pool
+
+steps:
+  - task: NodeTool@0
+    displayName: Use Node.js 18
+    inputs:
+      versionSpec: '18.x'
+
+  - script: npm install --production
+    displayName: Install script dependencies
+    workingDirectory: $(Build.SourcesDirectory)/scripts
+
+  - script: node send-daily-nag.js
+    displayName: Send daily missing-hours Slack reminders
+    workingDirectory: $(Build.SourcesDirectory)/scripts
+    env:
+      AZDO_SERVER_URL:      $(AZDO_SERVER_URL)
+      AZDO_PAT:             $(AZDO_PAT)
+      AZDO_PUBLISHER:       $(AZDO_PUBLISHER)
+      AZDO_EXTENSION_ID:    $(AZDO_EXTENSION_ID)
+      SLACK_BOT_TOKEN:      $(SLACK_BOT_TOKEN)
+      TIMETRACKER_URL:      $(TIMETRACKER_URL)
+      HOLIDAYS:             $(HOLIDAYS)
+      EXCLUDE_EMAILS:       $(EXCLUDE_EMAILS)
+      OVERRIDE_TARGET_DATE: '${{ parameters.override_target_date }}'
+      DRY_RUN:              ${{ parameters.dry_run }}

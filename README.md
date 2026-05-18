@@ -53,6 +53,15 @@ Sends each team member a weekly email with their day-by-day hour breakdown and t
 - Zero-hour days are highlighted; days with no entries show as —
 - Users who have never logged hours are not emailed
 
+### Daily Slack Reminders
+
+Sends a **private Slack DM** each weekday morning to anyone on the Notification Settings roster who logged **zero hours** for the previous working day — a gentle daily nudge so management doesn't have to chase people.
+
+- Delivered by an Azure DevOps pipeline (weekdays only; the Monday run checks the prior Friday)
+- Users are matched to Slack automatically by email — no extra mapping to maintain
+- Private DM only — no public call-outs
+- See **Daily Slack Reminders — Setup** below
+
 ### Time Reports (Hub)
 - Filter by date range, user, epic, project, client, and tags
 - Summary cards showing total hours, entries, users, and work items
@@ -185,6 +194,51 @@ Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
 | `override_week_start` | Any past Monday, e.g. `2026-05-06` |
 | `dry_run` | `true` — logs output without sending any emails |
 
+## Daily Slack Reminders — Setup
+
+Like the weekly email, this runs as a scheduled Azure DevOps pipeline that reads time data and the Notification Settings roster directly from the Extension Data service — no extra backend required. It DMs anyone with zero hours for the previous working day.
+
+> **Prerequisite:** the user must exist on the **Boards > Notification Settings** roster, and their Azure DevOps email must match their Slack account email (auto-lookup uses `users.lookupByEmail`). The "Send Email" toggle does **not** affect Slack — the daily reminder considers the whole roster (use `EXCLUDE_EMAILS` to opt someone out).
+
+### 1. Create a Slack app
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**
+2. Name it (e.g. *Time Tracker Reminder*) and pick your workspace
+3. Open **OAuth & Permissions** → under **Bot Token Scopes** add:
+   `chat:write`, `users:read`, `users:read.email`, `im:write`
+4. Click **Install to Workspace** and authorize
+5. Copy the **Bot User OAuth Token** (`xoxb-…`) — this is `SLACK_BOT_TOKEN`
+
+### 2. Create the pipeline
+
+Same as the weekly summary, but choose **Existing Azure Pipelines YAML file** → `/pipelines/daily-nag.yml`. Click **Save** (do not run yet).
+
+### 3. Set pipeline variables
+
+In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**. (`AZDO_SERVER_URL` / `AZDO_PAT` are the same as the weekly summary — the PAT needs the `vso.extension.data` scope.)
+
+| Variable | Example | Secret |
+|----------|---------|--------|
+| `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
+| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope)_ | ✓ |
+| `SLACK_BOT_TOKEN` | `xoxb-…` | ✓ |
+| `TIMETRACKER_URL` | `https://devops.company.com/.../_apis/.../My Time` _(optional link in the message)_ | |
+| `HOLIDAYS` | `2026-12-25,2026-12-26` _(optional, CSV of non-working days)_ | |
+| `EXCLUDE_EMAILS` | `contractor@company.com` _(optional, CSV — never nag these)_ | |
+
+### 4. Configure the schedule
+
+The schedule lives in `pipelines/daily-nag.yml` (`cron: "0 7 * * 1-5"` — **07:00 UTC, Mon–Fri**). Edit the hour to your team's working morning expressed in UTC. No weekend runs; the Monday run automatically targets the previous Friday.
+
+### Testing
+
+Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
+
+| Parameter | Value |
+|-----------|-------|
+| `override_target_date` | Any past working day, e.g. `2026-05-15` |
+| `dry_run` | `true` — logs who would be DMed without sending anything |
+
 ## Optional: Custom Fields for Project/Client Tracking
 
 The extension can optionally use custom fields to track **Project** and **Client** for each time entry. This is useful for agencies or teams working on multiple projects/clients.
@@ -271,11 +325,13 @@ azdo-timetracker/
 │   ├── time-report.html         # Reports hub
 │   └── notification-settings.html  # Admin page — email notification config
 ├── scripts/
-│   ├── package.json             # Dependencies for the pipeline script
-│   └── send-weekly-summary.js  # Pipeline script — reads config, sends emails
+│   ├── package.json             # Dependencies for the pipeline scripts
+│   ├── send-weekly-summary.js  # Pipeline script — reads config, sends emails
+│   └── send-daily-nag.js       # Pipeline script — DMs users missing yesterday's hours
 ├── pipelines/
 │   ├── weekly-summary.yml           # Scheduled pipeline — use when repo is in your DevOps
-│   └── weekly-summary-standalone.yml  # Self-contained version — use when repo is elsewhere
+│   ├── weekly-summary-standalone.yml  # Self-contained version — use when repo is elsewhere
+│   └── daily-nag.yml                # Scheduled pipeline — daily Slack missing-hours reminder
 └── static/
     └── icon.png                 # Extension icon
 ```

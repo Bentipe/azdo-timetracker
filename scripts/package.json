@@ -2,9 +2,10 @@
   "name": "weekly-summary-sender",
   "version": "1.0.0",
   "private": true,
-  "description": "Sends weekly hour summary emails from Azure DevOps Time Tracker data.",
+  "description": "Scheduled jobs for Azure DevOps Time Tracker: weekly summary emails and daily Slack hour reminders.",
   "main": "send-weekly-summary.js",
   "dependencies": {
+    "@slack/web-api": "^6.12.0",
     "nodemailer": "^6.9.0"
   }
 }
