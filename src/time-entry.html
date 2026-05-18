@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Time Entry</title>
-  <script>!function(){if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark')}()</script>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme) / saved user-theme; default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-entry.css">
@@ -59,9 +59,9 @@
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
-        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
-        return false;
+        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
+        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
+        return true;
       }
       var t = '';
       try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}

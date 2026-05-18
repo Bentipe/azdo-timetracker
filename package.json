@@ -1,6 +1,6 @@
 {
   "name": "azdo-timetracker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A simple time tracking extension for Azure DevOps that allows users to log time against User Stories and other work items, with reporting capabilities.",
   "main": "index.js",
   "directories": {
@@ -9,7 +9,10 @@
   "scripts": {
     "build": "tfx extension create --manifest-globs vss-extension.json",
     "build:dev": "tfx extension create --manifest-globs vss-extension.dev.json",
-    "build:dev:inc": "tfx extension create --manifest-globs vss-extension.dev.json --rev-version"
+    "build:dev:inc": "tfx extension create --manifest-globs vss-extension.dev.json --rev-version",
+    "publish": "tfx extension publish --manifest-globs vss-extension.json --token \"$TFX_MARKETPLACE_TOKEN\" ${TFX_SHARE_WITH:+--share-with $TFX_SHARE_WITH}",
+    "publish:dev": "tfx extension publish --manifest-globs vss-extension.dev.json --token \"$TFX_MARKETPLACE_TOKEN\" ${TFX_SHARE_WITH:+--share-with $TFX_SHARE_WITH}",
+    "publish:dev:inc": "tfx extension publish --manifest-globs vss-extension.dev.json --rev-version --token \"$TFX_MARKETPLACE_TOKEN\" ${TFX_SHARE_WITH:+--share-with $TFX_SHARE_WITH}"
   },
   "keywords": [],
   "author": "",
