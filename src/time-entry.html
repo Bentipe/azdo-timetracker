@@ -575,6 +575,10 @@
           showMessage("Entry not found", "error");
           return;
         }
+        if (!currentUser || entry.userId !== currentUser.id) {
+          showMessage("You can only delete your own entries", "error");
+          return;
+        }
 
         return deleteEntryById(entryId, entry.date);
       }).then(function() {
@@ -684,6 +688,7 @@
       getAllEntries().then(function(entries) {
         var entry = entries.find(function(e) { return e.id === entryId; });
         if (!entry) { showMessage("Entry not found", "error"); return; }
+        if (!currentUser || entry.userId !== currentUser.id) { showMessage("You can only edit your own entries", "error"); return; }
         editingEntryId = entryId;
         editingEntryOriginalDate = entry.date;
         document.getElementById("editHours").value = entry.hours;
@@ -736,16 +741,19 @@
           document.getElementById("editSaveBtn").disabled = false;
         });
       } else {
-        var entryToMove = null;
-        window.dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
-          var oldEntries = data || [];
-          entryToMove = oldEntries.find(function(e) { return e.id === editingEntryId; });
-          return window.dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== editingEntryId; }), { scopeType: "Default" });
-        }).then(function() {
-          return window.dataService.getValue(newKey, { scopeType: "Default" });
-        }).then(function(data) {
+        Promise.all([
+          window.dataService.getValue(originalKey, { scopeType: "Default" }),
+          window.dataService.getValue(newKey, { scopeType: "Default" })
+        ]).then(function(results) {
+          var oldEntries = results[0] || [];
+          var newEntries = results[1] || [];
+          var entryToMove = oldEntries.find(function(e) { return e.id === editingEntryId; });
+          if (!entryToMove) { throw new Error("Entry not found in original month"); }
           var updatedEntry = Object.assign({}, entryToMove, { hours: hours, date: date, description: description });
-          return window.dataService.setValue(newKey, (data || []).concat([updatedEntry]), { scopeType: "Default" });
+          // Write to new month first; only remove from old month after that succeeds
+          return window.dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
+            return window.dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== editingEntryId; }), { scopeType: "Default" });
+          });
         }).then(function() {
           showMessage("Entry updated", "success");
           closeEditModal();
