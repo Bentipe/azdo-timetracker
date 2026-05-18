@@ -35,6 +35,15 @@ When logging time on a Task or Bug, the extension automatically inherits missing
 
 This means you only need to set Tags, Project, and Client on your User Stories or Epics - all child work items will inherit these values automatically.
 
+### My Time (Hub + Dashboard Widget)
+
+A personal landing view for each user — their own hours and active work, not the cross-user reporting in Time Reports.
+
+- **Boards > My Time** hub: hours today / this week / this month, a Mon–Sun week strip (zero-hour weekdays gently flagged), a "What you're working on" table that merges work items assigned to you with anything you've logged time to recently, plus inline **quick-log** (log hours against any of those items without opening the work item), and your 10 most recent entries with delete.
+- **My Time dashboard widget** (2×2): hours this week / today and a count of assigned work items with no time logged this week. Clicking it opens the My Time hub.
+
+> **One-time setup for the widget:** Azure DevOps does not let an extension place a widget automatically, and an extension cannot be set as a project's landing page. To surface this on project entry, a project admin adds it once: **Overview > Dashboards > Edit > Add a widget > "My Time"**. After that it shows for everyone viewing that dashboard.
+
 ### Weekly Email Summaries
 
 Sends each team member a weekly email with their day-by-day hour breakdown and total. Managers can be CC'd per person.
@@ -43,6 +52,15 @@ Sends each team member a weekly email with their day-by-day hour breakdown and t
 - Delivered by an Azure DevOps pipeline on a configurable schedule
 - Zero-hour days are highlighted; days with no entries show as —
 - Users who have never logged hours are not emailed
+
+### Daily Slack Reminders
+
+Sends a **private Slack DM** each weekday morning to anyone on the Notification Settings roster who logged **zero hours** for the previous working day — a gentle daily nudge so management doesn't have to chase people.
+
+- Delivered by an Azure DevOps pipeline (weekdays only; the Monday run checks the prior Friday)
+- Users are matched to Slack automatically by email — no extra mapping to maintain
+- Private DM only — no public call-outs
+- See **Daily Slack Reminders — Setup** below
 
 ### Time Reports (Hub)
 - Filter by date range, user, epic, project, client, and tags
@@ -176,6 +194,51 @@ Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
 | `override_week_start` | Any past Monday, e.g. `2026-05-06` |
 | `dry_run` | `true` — logs output without sending any emails |
 
+## Daily Slack Reminders — Setup
+
+Like the weekly email, this runs as a scheduled Azure DevOps pipeline that reads time data and the Notification Settings roster directly from the Extension Data service — no extra backend required. It DMs anyone with zero hours for the previous working day.
+
+> **Prerequisite:** the user must exist on the **Boards > Notification Settings** roster, and their Azure DevOps email must match their Slack account email (auto-lookup uses `users.lookupByEmail`). The "Send Email" toggle does **not** affect Slack — the daily reminder considers the whole roster (use `EXCLUDE_EMAILS` to opt someone out).
+
+### 1. Create a Slack app
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**
+2. Name it (e.g. *Time Tracker Reminder*) and pick your workspace
+3. Open **OAuth & Permissions** → under **Bot Token Scopes** add:
+   `chat:write`, `users:read`, `users:read.email`, `im:write`
+4. Click **Install to Workspace** and authorize
+5. Copy the **Bot User OAuth Token** (`xoxb-…`) — this is `SLACK_BOT_TOKEN`
+
+### 2. Create the pipeline
+
+Same as the weekly summary, but choose **Existing Azure Pipelines YAML file** → `/pipelines/daily-nag.yml`. Click **Save** (do not run yet).
+
+### 3. Set pipeline variables
+
+In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**. (`AZDO_SERVER_URL` / `AZDO_PAT` are the same as the weekly summary — the PAT needs the `vso.extension.data` scope.)
+
+| Variable | Example | Secret |
+|----------|---------|--------|
+| `AZDO_SERVER_URL` | `http://devops.company.com/DefaultCollection` | |
+| `AZDO_PAT` | _(Personal Access Token — `vso.extension.data` scope)_ | ✓ |
+| `SLACK_BOT_TOKEN` | `xoxb-…` | ✓ |
+| `TIMETRACKER_URL` | `https://devops.company.com/.../_apis/.../My Time` _(optional link in the message)_ | |
+| `HOLIDAYS` | `2026-12-25,2026-12-26` _(optional, CSV of non-working days)_ | |
+| `EXCLUDE_EMAILS` | `contractor@company.com` _(optional, CSV — never nag these)_ | |
+
+### 4. Configure the schedule
+
+The schedule lives in `pipelines/daily-nag.yml` (`cron: "0 7 * * 1-5"` — **07:00 UTC, Mon–Fri**). Edit the hour to your team's working morning expressed in UTC. No weekend runs; the Monday run automatically targets the previous Friday.
+
+### Testing
+
+Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
+
+| Parameter | Value |
+|-----------|-------|
+| `override_target_date` | Any past working day, e.g. `2026-05-15` |
+| `dry_run` | `true` — logs who would be DMed without sending anything |
+
 ## Optional: Custom Fields for Project/Client Tracking
 
 The extension can optionally use custom fields to track **Project** and **Client** for each time entry. This is useful for agencies or teams working on multiple projects/clients.
@@ -212,17 +275,40 @@ Time entries are stored using Azure DevOps Extension Data Service with **collect
 
 ## Development
 
-To test locally:
+To build the `.vsix` locally:
 ```bash
 # Install dependencies (if adding any)
 npm install
 
-# Create the package
-tfx extension create --manifest-globs vss-extension.json
+# Production package
+npm run build
 
-# For development, you can use --rev-version to auto-increment
-tfx extension create --manifest-globs vss-extension.json --rev-version
+# Dev package
+npm run build:dev
+
+# Dev package, auto-incrementing the version
+npm run build:dev:inc
 ```
+
+### Publishing to the Marketplace
+
+Publishing (and sharing with private orgs) is automated through `tfx extension publish`. It is driven by two environment variables so nothing secret or org-specific is committed:
+
+| Variable | What it is |
+|----------|------------|
+| `TFX_MARKETPLACE_TOKEN` | A Personal Access Token from the **`miguelnicolas`** publisher's Azure DevOps org, scope **Marketplace → Manage**. |
+| `TFX_SHARE_WITH` | Space-separated Azure DevOps org slug(s) to share the (private) extension with, e.g. `"contoso fabrikam"`. Omit/unset to publish without sharing. |
+
+```bash
+export TFX_MARKETPLACE_TOKEN="xxxxxxxxxxxx"
+export TFX_SHARE_WITH="yourorg"            # space-separated for multiple
+
+npm run publish          # production extension, publish + share
+npm run publish:dev      # dev (Preview) extension
+npm run publish:dev:inc  # dev extension, auto-incrementing the version
+```
+
+The `--share-with` flag is only added when `TFX_SHARE_WITH` is set, so the same scripts work for public extensions too (just leave it unset).
 
 ## File Structure
 
@@ -233,14 +319,19 @@ azdo-timetracker/
 ├── README.md
 ├── src/
 │   ├── time-entry.html          # Work item form page
+│   ├── time-core.js             # Shared storage + entry-inheritance logic
+│   ├── my-time.html             # My Time hub — personal hours & quick-log
+│   ├── my-time-widget.html      # My Time dashboard widget
 │   ├── time-report.html         # Reports hub
 │   └── notification-settings.html  # Admin page — email notification config
 ├── scripts/
-│   ├── package.json             # Dependencies for the pipeline script
-│   └── send-weekly-summary.js  # Pipeline script — reads config, sends emails
+│   ├── package.json             # Dependencies for the pipeline scripts
+│   ├── send-weekly-summary.js  # Pipeline script — reads config, sends emails
+│   └── send-daily-nag.js       # Pipeline script — DMs users missing yesterday's hours
 ├── pipelines/
 │   ├── weekly-summary.yml           # Scheduled pipeline — use when repo is in your DevOps
-│   └── weekly-summary-standalone.yml  # Self-contained version — use when repo is elsewhere
+│   ├── weekly-summary-standalone.yml  # Self-contained version — use when repo is elsewhere
+│   └── daily-nag.yml                # Scheduled pipeline — daily Slack missing-hours reminder
 └── static/
     └── icon.png                 # Extension icon
 ```

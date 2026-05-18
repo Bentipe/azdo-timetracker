@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>My Time</title>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    html, body { height: 100%; background: transparent !important; }
+    a.widget {
+      display: flex; flex-direction: column; height: 100%; box-sizing: border-box;
+      padding: 16px 18px; text-decoration: none; color: var(--text-primary);
+    }
+    .w-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+    .w-main { display: flex; align-items: baseline; gap: 6px; margin-top: 10px; }
+    .w-main .num { font-size: 44px; font-weight: 600; color: var(--accent); line-height: 1; }
+    .w-main .unit { font-size: 18px; color: var(--text-secondary); }
+    .w-sub { margin-top: 6px; color: var(--text-secondary); font-size: 13px; }
+    .w-flag { margin-top: auto; font-size: 13px; }
+    .w-flag.warn { color: var(--warn-border); font-weight: 600; }
+    .w-flag.ok { color: var(--text-secondary); }
+    .w-loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); }
+  </style>
+</head>
+<body>
+  <a class="widget" id="wrap" target="_top" href="#">
+    <div id="loading" class="w-loading">Loading…</div>
+    <div id="body" style="display:none; height:100%; flex-direction:column;">
+      <div class="w-title">My Time</div>
+      <div class="w-main"><span class="num" id="weekHours">0</span><span class="unit">h this week</span></div>
+      <div class="w-sub" id="todaySub">0h today</div>
+      <div class="w-flag ok" id="flag">All assigned work has time logged</div>
+    </div>
+  </a>
+
+  <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
+        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
+        return true;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+          }
+        }
+      } catch(e) {}
+    }
+
+    var TC = window.TimeCore;
+    var EXCLUDED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
+
+    VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
+
+    VSS.require(["TFS/Dashboards/WidgetHelpers"], function (WidgetHelpers) {
+      WidgetHelpers.IncludeWidgetStyles();
+      // Must match the contribution "id" in vss-extension*.json exactly.
+      // VSS.getContribution().id resolves to the fully-qualified id here,
+      // which the dashboard host does not match against — so register the
+      // short id literally.
+      VSS.register("my-time-widget", function () {
+        return {
+          load:   function () { return run(WidgetHelpers); },
+          reload: function () { return run(WidgetHelpers); }
+        };
+      });
+      VSS.notifyLoadSucceeded();
+    });
+
+    function run(WidgetHelpers) {
+      applyDevOpsTheme();
+      return loadData().then(function () {
+        return WidgetHelpers.WidgetStatusHelper.Success();
+      }, function (err) {
+        console.error("[MyTimeWidget] load failed:", err);
+        return WidgetHelpers.WidgetStatusHelper.Failure(err && err.message ? err.message : "Failed to load");
+      });
+    }
+
+    function setHubLink() {
+      try {
+        var ctx = VSS.getWebContext();
+        var ext = VSS.getExtensionContext();
+        var base = ctx.host.uri + encodeURIComponent(ctx.project.name) +
+          "/_apps/hub/" + ext.publisherId + "." + ext.extensionId + ".my-time-hub";
+        document.getElementById("wrap").setAttribute("href", base);
+      } catch (e) { /* leave href="#"; widget still renders */ }
+    }
+
+    function loadData() {
+      setHubLink();
+      return VSS.getService(VSS.ServiceIds.ExtensionData).then(function (dataService) {
+        var currentUser = VSS.getWebContext().user;
+        var projectName = VSS.getWebContext().project && VSS.getWebContext().project.name;
+
+        var entriesP = TC.loadEntriesForMonths(dataService, 2).then(function (entries) {
+          return entries.filter(function (e) { return String(e.userId) === String(currentUser.id); });
+        });
+
+        var untrackedP = countUntracked(projectName, currentUser).catch(function () { return null; });
+
+        return Promise.all([entriesP, untrackedP]).then(function (res) {
+          var mine = res[0];
+          var untracked = res[1];
+
+          var today = TC.todayISO();
+          var weekSet = {};
+          TC.weekDates().forEach(function (d) { weekSet[d] = true; });
+
+          var weekHours = sum(mine.filter(function (e) { return weekSet[e.date]; }));
+          var todayHours = sum(mine.filter(function (e) { return e.date === today; }));
+
+          document.getElementById("weekHours").textContent = fmt(weekHours);
+          document.getElementById("todaySub").textContent = fmt(todayHours) + "h today";
+
+          var flag = document.getElementById("flag");
+          if (untracked == null) {
+            flag.textContent = "";
+          } else if (untracked > 0) {
+            flag.className = "w-flag warn";
+            flag.textContent = "⚠ " + untracked + " assigned item" + (untracked === 1 ? "" : "s") + " with no time this week";
+          } else {
+            flag.className = "w-flag ok";
+            flag.textContent = "All assigned work has time logged";
+          }
+
+          document.getElementById("loading").style.display = "none";
+          document.getElementById("body").style.display = "flex";
+        });
+      });
+    }
+
+    // Count active assigned items with zero hours logged this week.
+    function countUntracked(projectName, currentUser) {
+      return new Promise(function (resolve, reject) {
+        VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function (VSS_Service, WIT_Client) {
+          var client = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          var notIn = EXCLUDED_STATES.map(function (s) { return "'" + s + "'"; }).join(",");
+          var wiql = {
+            query: "SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me " +
+                   "AND [System.State] NOT IN (" + notIn + ")"
+          };
+          client.queryByWiql(wiql, { project: projectName }, false, 200).then(function (result) {
+            var ids = (result.workItems || []).map(function (w) { return w.id; });
+            resolve(ids);
+          }, reject);
+        });
+      }).then(function (assignedIds) {
+        if (!assignedIds.length) return 0;
+        return VSS.getService(VSS.ServiceIds.ExtensionData).then(function (dataService) {
+          return TC.loadEntriesForMonths(dataService, 2).then(function (entries) {
+            var weekSet = {};
+            TC.weekDates().forEach(function (d) { weekSet[d] = true; });
+            var loggedThisWeek = {};
+            entries.forEach(function (e) {
+              if (String(e.userId) === String(currentUser.id) && weekSet[e.date]) {
+                loggedThisWeek[String(e.workItemId)] = true;
+              }
+            });
+            return assignedIds.filter(function (id) { return !loggedThisWeek[String(id)]; }).length;
+          });
+        });
+      });
+    }
+
+    function sum(list) { return list.reduce(function (s, e) { return s + (e.hours || 0); }, 0); }
+    function fmt(h) { return h % 1 === 0 ? String(h) : h.toFixed(1); }
+  </script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 {
   "name": "azdo-timetracker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A simple time tracking extension for Azure DevOps that allows users to log time against User Stories and other work items, with reporting capabilities.",
   "main": "index.js",
   "directories": {
@@ -9,7 +9,10 @@
   "scripts": {
     "build": "tfx extension create --manifest-globs vss-extension.json",
     "build:dev": "tfx extension create --manifest-globs vss-extension.dev.json",
-    "build:dev:inc": "tfx extension create --manifest-globs vss-extension.dev.json --rev-version"
+    "build:dev:inc": "tfx extension create --manifest-globs vss-extension.dev.json --rev-version",
+    "publish": "node -e \"const { spawnSync } = require('child_process'); const args = ['tfx', 'extension', 'publish', '--manifest-globs', 'vss-extension.json', '--token', process.env.TFX_MARKETPLACE_TOKEN || '']; if (process.env.TFX_SHARE_WITH) args.push('--share-with', process.env.TFX_SHARE_WITH); const result = spawnSync('npx', args, { stdio: 'inherit', shell: process.platform === 'win32' }); process.exit(result.status ?? 1);\"",
+    "publish:dev": "node -e \"const { spawnSync } = require('child_process'); const args = ['tfx', 'extension', 'publish', '--manifest-globs', 'vss-extension.dev.json', '--token', process.env.TFX_MARKETPLACE_TOKEN || '']; if (process.env.TFX_SHARE_WITH) args.push('--share-with', process.env.TFX_SHARE_WITH); const result = spawnSync('npx', args, { stdio: 'inherit', shell: process.platform === 'win32' }); process.exit(result.status ?? 1);\"",
+    "publish:dev:inc": "node -e \"const { spawnSync } = require('child_process'); const args = ['tfx', 'extension', 'publish', '--manifest-globs', 'vss-extension.dev.json', '--rev-version', '--token', process.env.TFX_MARKETPLACE_TOKEN || '']; if (process.env.TFX_SHARE_WITH) args.push('--share-with', process.env.TFX_SHARE_WITH); const result = spawnSync('npx', args, { stdio: 'inherit', shell: process.platform === 'win32' }); process.exit(result.status ?? 1);\""
   },
   "keywords": [],
   "author": "",

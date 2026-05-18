@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
   "id": "timetracker-extension-dev",
-  "version": "1.4.29",
+  "version": "1.5.5",
   "name": "Time Tracker (DEV)",
   "description": "[DEVELOPMENT] Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
@@ -52,6 +52,19 @@
       }
     },
     {
+      "id": "my-time-hub",
+      "type": "ms.vss-web.hub",
+      "targets": [
+        "ms.vss-work-web.work-hub-group"
+      ],
+      "properties": {
+        "name": "My Time (DEV)",
+        "uri": "src/my-time.html",
+        "icon": "static/icon.png",
+        "order": 10
+      }
+    },
+    {
       "id": "time-report-hub",
       "type": "ms.vss-web.hub",
       "targets": [
@@ -60,7 +73,8 @@
       "properties": {
         "name": "Time Reports (DEV)",
         "uri": "src/time-report.html",
-        "icon": "static/icon.png"
+        "icon": "static/icon.png",
+        "order": 20
       }
     },
     {
@@ -72,7 +86,28 @@
       "properties": {
         "name": "Notification Settings (DEV)",
         "uri": "src/notification-settings.html",
-        "icon": "static/icon.png"
+        "icon": "static/icon.png",
+        "order": 30
+      }
+    },
+    {
+      "id": "my-time-widget",
+      "type": "ms.vss-dashboards-web.widget",
+      "targets": [
+        "ms.vss-dashboards-web.widget-catalog"
+      ],
+      "properties": {
+        "name": "My Time (DEV)",
+        "description": "Your logged hours this week and today, plus assigned work with no time logged.",
+        "catalogIconUrl": "static/icon.png",
+        "previewImageUrl": "static/icon.png",
+        "uri": "src/my-time-widget.html",
+        "supportedSizes": [
+          { "rowSpan": 2, "columnSpan": 2 }
+        ],
+        "supportedScopes": [
+          "project_team"
+        ]
       }
     }
   ],
