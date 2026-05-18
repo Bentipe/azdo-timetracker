@@ -35,6 +35,15 @@ When logging time on a Task or Bug, the extension automatically inherits missing
 
 This means you only need to set Tags, Project, and Client on your User Stories or Epics - all child work items will inherit these values automatically.
 
+### My Time (Hub + Dashboard Widget)
+
+A personal landing view for each user — their own hours and active work, not the cross-user reporting in Time Reports.
+
+- **Boards > My Time** hub: hours today / this week / this month, a Mon–Sun week strip (zero-hour weekdays gently flagged), a "What you're working on" table that merges work items assigned to you with anything you've logged time to recently, plus inline **quick-log** (log hours against any of those items without opening the work item), and your 10 most recent entries with delete.
+- **My Time dashboard widget** (2×2): hours this week / today and a count of assigned work items with no time logged this week. Clicking it opens the My Time hub.
+
+> **One-time setup for the widget:** Azure DevOps does not let an extension place a widget automatically, and an extension cannot be set as a project's landing page. To surface this on project entry, a project admin adds it once: **Overview > Dashboards > Edit > Add a widget > "My Time"**. After that it shows for everyone viewing that dashboard.
+
 ### Weekly Email Summaries
 
 Sends each team member a weekly email with their day-by-day hour breakdown and total. Managers can be CC'd per person.
@@ -212,17 +221,40 @@ Time entries are stored using Azure DevOps Extension Data Service with **collect
 
 ## Development
 
-To test locally:
+To build the `.vsix` locally:
 ```bash
 # Install dependencies (if adding any)
 npm install
 
-# Create the package
-tfx extension create --manifest-globs vss-extension.json
+# Production package
+npm run build
 
-# For development, you can use --rev-version to auto-increment
-tfx extension create --manifest-globs vss-extension.json --rev-version
+# Dev package
+npm run build:dev
+
+# Dev package, auto-incrementing the version
+npm run build:dev:inc
 ```
+
+### Publishing to the Marketplace
+
+Publishing (and sharing with private orgs) is automated through `tfx extension publish`. It is driven by two environment variables so nothing secret or org-specific is committed:
+
+| Variable | What it is |
+|----------|------------|
+| `TFX_MARKETPLACE_TOKEN` | A Personal Access Token from the **`miguelnicolas`** publisher's Azure DevOps org, scope **Marketplace → Manage**. |
+| `TFX_SHARE_WITH` | Space-separated Azure DevOps org slug(s) to share the (private) extension with, e.g. `"contoso fabrikam"`. Omit/unset to publish without sharing. |
+
+```bash
+export TFX_MARKETPLACE_TOKEN="xxxxxxxxxxxx"
+export TFX_SHARE_WITH="yourorg"            # space-separated for multiple
+
+npm run publish          # production extension, publish + share
+npm run publish:dev      # dev (Preview) extension
+npm run publish:dev:inc  # dev extension, auto-incrementing the version
+```
+
+The `--share-with` flag is only added when `TFX_SHARE_WITH` is set, so the same scripts work for public extensions too (just leave it unset).
 
 ## File Structure
 
@@ -233,6 +265,9 @@ azdo-timetracker/
 ├── README.md
 ├── src/
 │   ├── time-entry.html          # Work item form page
+│   ├── time-core.js             # Shared storage + entry-inheritance logic
+│   ├── my-time.html             # My Time hub — personal hours & quick-log
+│   ├── my-time-widget.html      # My Time dashboard widget
 │   ├── time-report.html         # Reports hub
 │   └── notification-settings.html  # Admin page — email notification config
 ├── scripts/

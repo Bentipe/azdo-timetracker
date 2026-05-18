@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>My Time</title>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="my-time.css">
+</head>
+<body>
+  <div id="message" class="message" style="display:none;"></div>
+
+  <div class="page-header">
+    <h1 id="greeting">My Time</h1>
+    <div class="today-date" id="todayDate"></div>
+  </div>
+
+  <div class="filters">
+    <div class="filter-group">
+      <label for="dateFrom">From</label>
+      <input type="date" id="dateFrom">
+    </div>
+    <div class="filter-group">
+      <label for="dateTo">To</label>
+      <input type="date" id="dateTo">
+    </div>
+    <div class="btn-group">
+      <button onclick="applyFilters()">Apply</button>
+      <button class="secondary" onclick="clearFilters()">Clear</button>
+    </div>
+  </div>
+
+  <div id="loading" class="loading">Loading…</div>
+
+  <div id="content" style="display:none;">
+    <div class="section">
+      <div class="summary-cards">
+        <div class="summary-card">
+          <h3>Today</h3>
+          <div class="value" id="cardToday">0<small>h</small></div>
+        </div>
+        <div class="summary-card">
+          <h3>This Week</h3>
+          <div class="value" id="cardWeek">0<small>h</small></div>
+        </div>
+        <div class="summary-card">
+          <h3>This Month</h3>
+          <div class="value" id="cardMonth">0<small>h</small></div>
+        </div>
+        <div class="summary-card clickable" id="cardUntrackedWrap" onclick="document.getElementById('workSection').scrollIntoView({behavior:'smooth'})">
+          <h3>Untracked This Week</h3>
+          <div class="value" id="cardUntracked">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">This Week</div>
+      <div class="week-strip" id="weekStrip"></div>
+    </div>
+
+    <div class="section" id="workSection">
+      <div class="section-title">What You're Working On</div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Work Item</th>
+              <th>Parent / Epic</th>
+              <th>This Week</th>
+              <th>In Range</th>
+              <th>Last Logged</th>
+              <th>Quick Log</th>
+            </tr>
+          </thead>
+          <tbody id="workBody"></tbody>
+        </table>
+        <div id="workEmpty" class="empty" style="display:none;">Nothing assigned to you and no time logged recently.</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Recent Entries</div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Work Item</th><th>Description</th><th>Hours</th><th></th></tr>
+          </thead>
+          <tbody id="recentBody"></tbody>
+        </table>
+        <div id="recentEmpty" class="empty" style="display:none;">No time entries yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
+        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
+        return true;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
+    console.log("[MyTime] Script started");
+    var TC = window.TimeCore;
+    var currentUser = null;
+    var witClient = null;
+    var allMyEntries = [];      // user's entries across the loaded window (live KPI math)
+    var filteredEntries = [];   // allMyEntries within the selected From/To range
+    var assignedItems = [];     // active work items assigned to @Me
+    var closedEntryItemIds = {}; // { idString: true } — entry-only items whose CURRENT state is closed
+
+    var EXCLUDED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
+
+    function initializeExtension() {
+      if (typeof VSS === "undefined") { setTimeout(initializeExtension, 50); return; }
+      try {
+        VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
+        applyDevOpsTheme();
+      } catch (err) { console.error("[MyTime] VSS.init failed:", err); return; }
+
+      VSS.ready(function() {
+        VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
+          window.dataService = dataService;
+          // Hub pages can detect the theme; persist it so the sandboxed
+          // work-item form (which can't) picks it up. Parity with time-report.
+          try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
+
+          var ctx = VSS.getWebContext();
+          currentUser = ctx.user;
+          window.__projectName = ctx.project && ctx.project.name;
+
+          var first = (currentUser.name || "").split(/[ ,]/)[0] || currentUser.name;
+          document.getElementById("greeting").textContent = "Hi, " + first;
+          document.getElementById("todayDate").textContent =
+            new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+          setDefaultRange();
+          function begin() { reloadAll().then(function() { VSS.notifyLoadSucceeded(); }); }
+          try {
+            VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
+              nav.getHash().then(function(hash) {
+                applyHashToInputs(parseHashString(hash));
+                begin();
+              }, begin);
+            }, begin);
+          } catch (e) { begin(); }
+        }, function(err) {
+          console.error("[MyTime] Failed to get extension data service:", err);
+        });
+      });
+    }
+    initializeExtension();
+
+    function getWitClient() {
+      if (witClient) return Promise.resolve(witClient);
+      return new Promise(function(resolve) {
+        VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function(VSS_Service, WIT_Client) {
+          witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(witClient);
+        });
+      });
+    }
+
+    // WIQL: active work items assigned to the current user in this project.
+    // Degrades gracefully — a failure just means we show logged items only.
+    function loadAssignedItems() {
+      return getWitClient().then(function(client) {
+        var notIn = EXCLUDED_STATES.map(function(s){ return "'" + s + "'"; }).join(",");
+        var wiql = {
+          query:
+            "SELECT [System.Id] FROM WorkItems " +
+            "WHERE [System.AssignedTo] = @Me " +
+            "AND [System.State] NOT IN (" + notIn + ") " +
+            "ORDER BY [System.ChangedDate] DESC"
+        };
+        var teamContext = { project: window.__projectName };
+        return client.queryByWiql(wiql, teamContext, false, 100).then(function(result) {
+          var ids = (result.workItems || []).map(function(w){ return w.id; }).slice(0, 100);
+          if (!ids.length) return [];
+          var fields = ["System.Id","System.Title","System.WorkItemType","System.State","System.Parent","System.Tags"];
+          return client.getWorkItems(ids, window.__projectName, fields).then(function(items) {
+            return items.map(function(wi) {
+              return {
+                id: wi.id,
+                title: wi.fields["System.Title"],
+                type: wi.fields["System.WorkItemType"],
+                state: wi.fields["System.State"],
+                parentId: wi.fields["System.Parent"] || null,
+                tags: wi.fields["System.Tags"] || ""
+              };
+            });
+          });
+        });
+      }).catch(function(err) {
+        console.warn("[MyTime] Assigned-items query failed, continuing without it:", err);
+        return [];
+      });
+    }
+
+    // ---- Date-range filter (mirrors the Time Reports hub) ------------
+
+    function setDefaultRange() {
+      var today = new Date();
+      var from = new Date(today);
+      from.setDate(from.getDate() - 30);
+      document.getElementById("dateTo").value = TC.localISODate(today);
+      document.getElementById("dateFrom").value = TC.localISODate(from);
+    }
+
+    function parseHashString(hash) {
+      if (!hash) return null;
+      var raw = {};
+      hash.split("&").forEach(function(pair) {
+        var i = pair.indexOf("=");
+        if (i > 0) raw[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1));
+      });
+      var out = {};
+      if (raw.startdate) out.dateFrom = raw.startdate;
+      if (raw.enddate)   out.dateTo   = raw.enddate;
+      return Object.keys(out).length ? out : null;
+    }
+
+    function applyHashToInputs(f) {
+      if (!f) return;
+      if (f.dateFrom) document.getElementById("dateFrom").value = f.dateFrom;
+      if (f.dateTo)   document.getElementById("dateTo").value   = f.dateTo;
+    }
+
+    function writeHashFilters() {
+      var parts = [];
+      var df = document.getElementById("dateFrom").value;
+      var dt = document.getElementById("dateTo").value;
+      if (df) parts.push("startdate=" + encodeURIComponent(df));
+      if (dt) parts.push("enddate=" + encodeURIComponent(dt));
+      try {
+        VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) { nav.setHash(parts.join("&")); });
+      } catch(e) {}
+    }
+
+    function applyFilters() { writeHashFilters(); reloadAll(); }
+    function clearFilters() { setDefaultRange(); writeHashFilters(); reloadAll(); }
+
+    // Of the work items that come ONLY from logged entries (entries carry
+    // no state), find which are CURRENTLY closed so they can be hidden.
+    // Assigned items are skipped — the WIQL already proved them active.
+    // Degrades to {} (hide nothing) on any failure.
+    function loadClosedEntryItemIds(entries, assigned) {
+      var assignedSet = {};
+      (assigned || []).forEach(function(wi) { assignedSet[String(wi.id)] = true; });
+
+      var seen = {}, ids = [];
+      (entries || []).forEach(function(e) {
+        var key = String(e.workItemId);
+        if (assignedSet[key] || seen[key]) return;
+        var n = parseInt(e.workItemId, 10);
+        if (!n || isNaN(n)) return;
+        seen[key] = true;
+        ids.push(n);
+      });
+      if (!ids.length) return Promise.resolve({});
+
+      var chunks = [];
+      for (var i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+
+      return getWitClient().then(function(client) {
+        return Promise.all(chunks.map(function(chunkIds) {
+          // signature: getWorkItems(ids, project, fields, asOf, expand, errorPolicy)
+          // project=null → collection scope (entries may be cross-project);
+          // errorPolicy 2 = Omit → deleted/inaccessible ids are dropped, not fatal.
+          return client.getWorkItems(chunkIds, null, ["System.Id", "System.State"], null, null, 2)
+            .then(function(items) { return items || []; }, function() { return []; });
+        })).then(function(results) {
+          var closed = {};
+          results.forEach(function(items) {
+            items.forEach(function(wi) {
+              var st = wi && wi.fields && wi.fields["System.State"];
+              if (st && EXCLUDED_STATES.indexOf(st) !== -1) closed[String(wi.id)] = true;
+            });
+          });
+          return closed;
+        });
+      }).catch(function(err) {
+        console.warn("[MyTime] Closed-state lookup failed, showing all logged items:", err);
+        return {};
+      });
+    }
+
+    function reloadAll() {
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("content").style.display = "none";
+
+      var dateFrom = document.getElementById("dateFrom").value;
+      var dateTo   = document.getElementById("dateTo").value;
+      if (!dateFrom || !dateTo) {
+        setDefaultRange();
+        dateFrom = document.getElementById("dateFrom").value;
+        dateTo   = document.getElementById("dateTo").value;
+      }
+
+      // Always include the current + previous month so the live Today /
+      // This Week / This Month cards never go blank on a past-only range.
+      var monthKeys = TC.monthKeysBetween(dateFrom, dateTo).concat(TC.recentMonthKeys(2));
+
+      return Promise.all([
+        TC.loadEntriesForKeys(window.dataService, monthKeys),
+        loadAssignedItems()
+      ]).then(function(res) {
+        var entries = res[0];
+        assignedItems = res[1];
+        allMyEntries = entries.filter(function(e) {
+          return String(e.userId) === String(currentUser.id);
+        });
+        filteredEntries = allMyEntries.filter(function(e) {
+          return e.date >= dateFrom && e.date <= dateTo;
+        });
+        return loadClosedEntryItemIds(filteredEntries, assignedItems).then(function(closed) {
+          closedEntryItemIds = closed || {};
+          render();
+          document.getElementById("loading").style.display = "none";
+          document.getElementById("content").style.display = "block";
+        });
+      }, function(err) {
+        console.error("[MyTime] reloadAll failed:", err);
+        allMyEntries = [];
+        filteredEntries = [];
+        assignedItems = [];
+        closedEntryItemIds = {};
+        render();
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("content").style.display = "block";
+      });
+    }
+
+    function sumHours(list) {
+      return list.reduce(function(s, e){ return s + (e.hours || 0); }, 0);
+    }
+
+    function render() {
+      var today = TC.todayISO();
+      var week = TC.weekDates();          // Mon..Sun ISO strings
+      var weekSet = {};
+      week.forEach(function(d){ weekSet[d] = true; });
+      var monthPrefix = today.slice(0, 7); // YYYY-MM
+
+      var todayHours = sumHours(allMyEntries.filter(function(e){ return e.date === today; }));
+      var weekHours  = sumHours(allMyEntries.filter(function(e){ return weekSet[e.date]; }));
+      var monthHours = sumHours(allMyEntries.filter(function(e){ return (e.date || "").slice(0,7) === monthPrefix; }));
+
+      setCard("cardToday", todayHours);
+      setCard("cardWeek", weekHours);
+      setCard("cardMonth", monthHours);
+
+      renderWeekStrip(week, today);
+      var untracked = renderWorkTable(week, weekSet);
+      document.getElementById("cardUntracked").textContent = untracked;
+      document.getElementById("cardUntrackedWrap").classList.toggle("is-warn", untracked > 0);
+
+      renderRecent();
+    }
+
+    function setCard(id, hours) {
+      document.getElementById(id).innerHTML = hours.toFixed(hours % 1 === 0 ? 0 : 1) + "<small>h</small>";
+    }
+
+    function renderWeekStrip(week, today) {
+      var dow = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+      var maxH = 0;
+      var perDay = week.map(function(iso) {
+        var h = sumHours(allMyEntries.filter(function(e){ return e.date === iso; }));
+        if (h > maxH) maxH = h;
+        return h;
+      });
+      var html = week.map(function(iso, i) {
+        var h = perDay[i];
+        var isToday = iso === today;
+        var dom = parseInt(iso.slice(8, 10), 10);
+        // Past weekday (Mon–Fri) with nothing logged → gentle flag.
+        var missed = !isToday && iso < today && i < 5 && h === 0;
+        var barW = maxH > 0 ? Math.max(4, Math.round((h / maxH) * 100)) : 0;
+        return '<div class="day-cell' + (isToday ? ' today' : '') + (missed ? ' missed' : '') + '">' +
+          '<div class="dow">' + dow[i] + '</div>' +
+          '<div class="dom">' + dom + '</div>' +
+          '<div class="hrs' + (h === 0 ? ' zero' : '') + '">' + (h ? h.toFixed(h % 1 === 0 ? 0 : 1) : "—") + '</div>' +
+          '<div class="bar" style="width:' + barW + '%;' + (h === 0 ? 'opacity:0;' : '') + '"></div>' +
+        '</div>';
+      }).join("");
+      document.getElementById("weekStrip").innerHTML = html;
+    }
+
+    function renderWorkTable(week, weekSet) {
+      // Rows come from entries within the selected date range. Items whose
+      // CURRENT state is closed (and that aren't active-assigned) are skipped.
+      var byItem = {};
+      filteredEntries.forEach(function(e) {
+        var key = String(e.workItemId);
+        if (closedEntryItemIds[key]) return;
+        if (!byItem[key]) {
+          byItem[key] = {
+            id: e.workItemId,
+            title: e.workItemTitle,
+            parentTitle: e.parentTitle || e.epicTitle || null,
+            parentType: e.parentType || (e.epicTitle ? "Epic" : null),
+            weekHours: 0,
+            recentHours: 0,
+            lastDate: null
+          };
+        }
+        var row = byItem[key];
+        row.recentHours += e.hours || 0;
+        if (!row.lastDate || e.date > row.lastDate) row.lastDate = e.date;
+        if (!row.title && e.workItemTitle) row.title = e.workItemTitle;
+      });
+
+      // Fold in assigned items (so active work with no time still shows).
+      assignedItems.forEach(function(wi) {
+        var key = String(wi.id);
+        if (!byItem[key]) {
+          byItem[key] = { id: wi.id, title: wi.title, parentTitle: null, parentType: null, weekHours: 0, recentHours: 0, lastDate: null };
+        }
+        byItem[key].assigned = true;
+        byItem[key].type = wi.type;
+        byItem[key].state = wi.state;
+        if (!byItem[key].title) byItem[key].title = wi.title;
+      });
+
+      // Current-week hours are LIVE (from allMyEntries), independent of the
+      // date filter, so the "No time this week" nudge stays meaningful.
+      allMyEntries.forEach(function(e) {
+        if (!weekSet[e.date]) return;
+        var key = String(e.workItemId);
+        if (byItem[key]) byItem[key].weekHours += e.hours || 0;
+      });
+
+      var rows = Object.keys(byItem).map(function(k){ return byItem[k]; });
+      // Order: assigned & untracked-this-week first, then most time this week, then most recent.
+      rows.sort(function(a, b) {
+        var au = (a.assigned && a.weekHours === 0) ? 1 : 0;
+        var bu = (b.assigned && b.weekHours === 0) ? 1 : 0;
+        if (au !== bu) return bu - au;
+        if (b.weekHours !== a.weekHours) return b.weekHours - a.weekHours;
+        return (b.lastDate || "").localeCompare(a.lastDate || "");
+      });
+
+      var body = document.getElementById("workBody");
+      var empty = document.getElementById("workEmpty");
+      if (rows.length === 0) {
+        body.innerHTML = "";
+        empty.style.display = "block";
+        return 0;
+      }
+      empty.style.display = "none";
+
+      var untracked = 0;
+      var todayVal = TC.todayISO();
+      body.innerHTML = rows.map(function(r) {
+        var isUntracked = r.assigned && r.weekHours === 0;
+        if (isUntracked) untracked++;
+        var typeBadge = r.type ? '<span class="badge type">' + escapeHtml(r.type) + '</span> ' : '';
+        var nudge = isUntracked ? ' <span class="badge warn">No time this week</span>' : '';
+        var parent = r.parentTitle
+          ? escapeHtml(r.parentTitle) + (r.parentType ? ' <span class="muted">(' + escapeHtml(r.parentType) + ')</span>' : '')
+          : '<span class="muted">—</span>';
+        return '<tr>' +
+          '<td>' + typeBadge +
+            '<span class="wi-title">' + escapeHtml(r.title || "(untitled)") + '</span> ' +
+            '<span class="wi-id">#' + r.id + '</span>' + nudge + '</td>' +
+          '<td>' + parent + '</td>' +
+          '<td>' + (r.weekHours ? '<strong>' + r.weekHours.toFixed(1) + 'h</strong>' : '<span class="muted">—</span>') + '</td>' +
+          '<td>' + (r.recentHours ? r.recentHours.toFixed(1) + 'h' : '<span class="muted">—</span>') + '</td>' +
+          '<td>' + (r.lastDate ? r.lastDate : '<span class="muted">—</span>') + '</td>' +
+          '<td><div class="quicklog">' +
+            '<input type="number" min="0.25" max="24" step="0.25" placeholder="h" id="ql-h-' + r.id + '" ' +
+              'onkeydown="return event.key !== \'e\' && event.key !== \'E\' && event.key !== \'+\' && event.key !== \'-\'">' +
+            '<input type="date" id="ql-d-' + r.id + '" value="' + todayVal + '">' +
+            '<button id="ql-b-' + r.id + '" onclick="quickLog(' + r.id + ')">Log</button>' +
+          '</div></td>' +
+        '</tr>';
+      }).join("");
+      return untracked;
+    }
+
+    function renderRecent() {
+      var sorted = filteredEntries.slice().sort(function(a, b) {
+        if (b.date !== a.date) return b.date < a.date ? -1 : 1;
+        return (b.createdAt || "").localeCompare(a.createdAt || "");
+      }).slice(0, 10);
+
+      var body = document.getElementById("recentBody");
+      var empty = document.getElementById("recentEmpty");
+      if (sorted.length === 0) {
+        body.innerHTML = "";
+        empty.style.display = "block";
+        return;
+      }
+      empty.style.display = "none";
+      body.innerHTML = sorted.map(function(e) {
+        return '<tr>' +
+          '<td>' + e.date + '</td>' +
+          '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> <span class="wi-id">#' + e.workItemId + '</span></td>' +
+          '<td>' + (e.description ? escapeHtml(e.description) : '<span class="muted">—</span>') + '</td>' +
+          '<td><strong>' + e.hours + 'h</strong></td>' +
+          '<td><button class="delete-btn" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">Delete</button></td>' +
+        '</tr>';
+      }).join("");
+    }
+
+    function quickLog(workItemId) {
+      var hEl = document.getElementById("ql-h-" + workItemId);
+      var dEl = document.getElementById("ql-d-" + workItemId);
+      var bEl = document.getElementById("ql-b-" + workItemId);
+      var hours = parseFloat(hEl.value);
+      var date = dEl.value;
+
+      if (!hours || hours <= 0 || hours > 24) { showMessage("Enter valid hours (0.25 – 24)", "error"); return; }
+      if (!date) { showMessage("Pick a date", "error"); return; }
+
+      bEl.disabled = true;
+      getWitClient().then(function(client) {
+        return TC.buildEntryForWorkItem(client, workItemId, currentUser, { hours: hours, date: date, description: "" });
+      }).then(function(entry) {
+        return TC.saveEntry(window.dataService, entry);
+      }).then(function() {
+        showMessage("Logged " + hours + "h to #" + workItemId, "success");
+        return reloadAll();
+      }).catch(function(err) {
+        console.error("[MyTime] quickLog failed:", err);
+        showMessage("Error: " + (err && err.message ? err.message : "could not log time"), "error");
+        if (bEl) bEl.disabled = false;
+      });
+    }
+
+    function deleteEntry(entryId, entryDate) {
+      if (!confirm("Delete this time entry?")) return;
+      TC.deleteEntryById(window.dataService, entryId, entryDate).then(function() {
+        showMessage("Entry deleted", "success");
+        return reloadAll();
+      }).catch(function(err) {
+        console.error("[MyTime] delete failed:", err);
+        showMessage("Error: " + (err && err.message ? err.message : "could not delete"), "error");
+      });
+    }
+
+    function showMessage(text, type) {
+      var msg = document.getElementById("message");
+      msg.textContent = text;
+      msg.className = "message " + type;
+      msg.style.display = "block";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setTimeout(function(){ msg.style.display = "none"; }, 3500);
+    }
+
+    function escapeHtml(text) {
+      if (text == null) return "";
+      var div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

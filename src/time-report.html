@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Time Reports</title>
-  <script>!function(){if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark')}()</script>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-report.css">
@@ -100,8 +100,18 @@
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        if (t.indexOf('dark')  !== -1) { document.documentElement.classList.add('dark');    return true; }
-        if (t.indexOf('light') !== -1) { document.documentElement.classList.remove('dark'); return true; }
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        // Known Azure DevOps light/default themes should map to light, but
+        // unrecognized non-empty values must fall through to the existing
+        // detection cascade rather than forcing light.
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
         return false;
       }
       var t = '';
