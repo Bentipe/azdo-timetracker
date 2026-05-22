@@ -57,6 +57,12 @@
       <button class="secondary" onclick="exportCSV()">Export CSV</button>
       <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
     </div>
+    <div class="filters-add">
+      <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add Entry
+      </button>
+    </div>
   </div>
 
   <div class="summary-cards" id="summaryCards">
@@ -157,6 +163,38 @@
     var escapeHtml = TC.escapeHtml;
     var editingEntryId = null;
     var editingEntryOriginalDate = null;
+    var _witClient = null;
+
+    function getWitClient() {
+      if (_witClient) return Promise.resolve(_witClient);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          _witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(_witClient);
+        });
+      });
+    }
+
+    function openAddEntry() {
+      var seen = {}, recent = [];
+      // Build recent list from current user's entries, newest first.
+      allEntries.filter(function(e) {
+        return currentUser && String(e.userId) === String(currentUser.id);
+      }).slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: currentProjectName,
+        recentItems: recent.slice(0, 20),
+        onSaved: function() { loadAllEntries(); }
+      });
+    }
 
     function parseHashString(hash) {
       if (!hash) return null;

@@ -30,6 +30,12 @@
       <button onclick="applyFilters()">Apply</button>
       <button class="secondary" onclick="clearFilters()">Clear</button>
     </div>
+    <div class="filters-add">
+      <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add Entry
+      </button>
+    </div>
   </div>
 
   <div class="page-scroll">
@@ -672,6 +678,30 @@
       }).catch(function(err) {
         console.error("[MyTime] delete failed:", err);
         showMessage("Error: " + (err && err.message ? err.message : "could not delete"), "error");
+      });
+    }
+
+    function openAddEntry() {
+      var seen = {}, recent = [];
+      // Items from recent entries first (most recently logged date first),
+      // then active assigned items not yet in the list.
+      allMyEntries.slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      assignedItems.forEach(function(wi) {
+        var k = String(wi.id);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: wi.id, title: wi.title, type: wi.type }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: window.__projectName,
+        recentItems: recent.slice(0, 20),
+        onSaved: function() { showMessage('Time logged!', 'success'); reloadAll(); }
       });
     }
 

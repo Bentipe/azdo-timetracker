@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
    time-core.js — shared storage + entry logic
 
    Loaded as a plain <script> (no build step), exposes window.TimeCore.
@@ -287,6 +287,257 @@
     });
   }
 
+  // ---- Add / Edit entry modal (work item picker + time entry form) ---
+  // Single-screen design: the work item chip and the form fields are
+  // always visible together. Clicking the chip (or the search area)
+  // toggles the picker list open/closed.
+  //
+  // config: {
+  //   dataService     — ExtensionData service
+  //   witClientGetter — () => Promise<witClient>
+  //   currentUser     — { id, name, email }
+  //   projectName     — scopes the WIQL title search
+  //   recentItems     — [{ id, title, type }] shown before the user types
+  //   onSaved         — () called after a successful save
+  //   // Pre-fill for future edit use:
+  //   title           — modal heading (default "Log Time")
+  //   saveLabel       — save button label (default "Log Time")
+  //   initialItem     — { id, title, type } pre-selected work item
+  //   initialHours    — number
+  //   initialDate     — "YYYY-MM-DD"
+  //   initialDesc     — string
+  // }
+  function openAddEntryModal(config) {
+    var old = document.getElementById('tcAddModal');
+    if (old) old.remove();
+
+    var today = localISODate(new Date());
+    var backdrop = document.createElement('div');
+    backdrop.id = 'tcAddModal';
+    backdrop.className = 'edit-modal-backdrop';
+    backdrop.style.display = 'flex';
+
+    var PENCIL_ICON =
+      '<svg class="tc-chip-pencil" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
+        ' stroke="currentColor" stroke-width="2.5">' +
+        '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>' +
+        '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>' +
+      '</svg>';
+
+    backdrop.innerHTML =
+      '<div class="edit-modal-content tc-add-modal">' +
+        '<div class="tc-add-header"><h3>' + escapeHtml(config.title || 'Log Time') + '</h3>' +
+          '<button class="tc-modal-close" id="tcAddClose" title="Close">&#x2715;</button></div>' +
+        // Work item area: chip (selected) XOR search (unselected)
+        '<button class="tc-selected-chip" id="tcSelectedChip" style="display:none"' +
+          ' title="Click to change work item">' +
+          '<span id="tcChipContent"></span>' +
+          PENCIL_ICON +
+        '</button>' +
+        '<div id="tcSearchWrap">' +
+          '<input type="text" id="tcSearchInput" class="tc-search-input"' +
+            ' placeholder="Search by title or work item #ID…" autocomplete="off">' +
+          '<div id="tcSearchStatus" class="tc-search-status"></div>' +
+          '<div id="tcItemList" class="tc-item-list"></div>' +
+        '</div>' +
+        // Form fields — always visible
+        '<div class="filter-group" style="margin-top:8px">' +
+          '<label for="tcHours">Hours Spent</label>' +
+          '<input type="number" id="tcHours" min="0.25" max="24" step="0.25" placeholder="e.g. 2.5"' +
+            ' onkeydown="return event.key!==\'e\'&&event.key!==\'E\'&&event.key!==\'+\'&&event.key!==\'-\'">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDate">Date</label>' +
+          '<input type="date" id="tcDate" value="' + today + '">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDesc">Description' +
+            ' <span style="font-weight:400;color:var(--text-secondary)">(optional, max 100 chars)</span></label>' +
+          '<textarea id="tcDesc" rows="2" maxlength="100"' +
+            ' style="resize:vertical;width:100%;box-sizing:border-box;"></textarea>' +
+        '</div>' +
+        '<div id="tcFormMsg" class="message" style="display:none;margin:0;padding:6px 10px;font-size:13px;"></div>' +
+        '<div class="edit-modal-actions">' +
+          '<button id="tcSaveBtn">' + escapeHtml(config.saveLabel || 'Log Time') + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(backdrop);
+
+    var selectedItem = null;
+    var searchTimer  = null;
+
+    function close() { backdrop.remove(); document.removeEventListener('keydown', onEsc); }
+
+    // Show the search input + list, hide the chip
+    function openSearch() {
+      selectedItem = null;
+      document.getElementById('tcSelectedChip').style.display = 'none';
+      document.getElementById('tcSearchWrap').style.display = '';
+      document.getElementById('tcSearchInput').value = '';
+      document.getElementById('tcSearchStatus').textContent = '';
+      renderList(config.recentItems || [], 'Recently used');
+      setTimeout(function() { document.getElementById('tcSearchInput').focus(); }, 0);
+    }
+
+    // Hide search, show the selected-item chip
+    function selectItem(item) {
+      selectedItem = item;
+      document.getElementById('tcSearchWrap').style.display = 'none';
+      var chip = document.getElementById('tcSelectedChip');
+      chip.style.display = '';
+      document.getElementById('tcChipContent').innerHTML =
+        (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+        '<span class="wi-id">#' + item.id + '</span> ' +
+        '<span class="wi-title">' + escapeHtml(item.title) + '</span>';
+      document.getElementById('tcFormMsg').style.display = 'none';
+      setTimeout(function() { document.getElementById('tcHours').focus(); }, 0);
+    }
+
+    function renderList(items, groupLabel) {
+      var list = document.getElementById('tcItemList');
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="tc-item-empty">' +
+          escapeHtml(groupLabel || 'No items found') + '</div>';
+        return;
+      }
+      list.innerHTML =
+        (groupLabel ? '<div class="tc-item-group">' + escapeHtml(groupLabel) + '</div>' : '') +
+        items.map(function(item) {
+          return '<button class="tc-item-row">' +
+            (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+            '<span class="wi-id">#' + item.id + '</span> ' +
+            '<span class="wi-title tc-item-title">' + escapeHtml(item.title || '(untitled)') + '</span>' +
+          '</button>';
+        }).join('');
+      var cached = items;
+      Array.prototype.forEach.call(list.querySelectorAll('.tc-item-row'), function(btn, i) {
+        btn.addEventListener('click', function() { selectItem(cached[i]); });
+      });
+    }
+
+    function doSearch(raw) {
+      var q = (raw || '').trim();
+      var statusEl = document.getElementById('tcSearchStatus');
+      if (!q) {
+        statusEl.textContent = '';
+        renderList(config.recentItems || [], 'Recently used');
+        return;
+      }
+      // Pure number → direct work item ID lookup
+      if (/^\d+$/.test(q)) {
+        statusEl.textContent = 'Looking up #' + q + '…';
+        config.witClientGetter().then(function(c) {
+          return c.getWorkItem(parseInt(q, 10), null, null, 0);
+        }).then(function(wi) {
+          statusEl.textContent = '';
+          renderList([{
+            id: wi.id,
+            title: wi.fields['System.Title'],
+            type: wi.fields['System.WorkItemType']
+          }], null);
+        }).catch(function() {
+          statusEl.textContent = '';
+          renderList([], 'No work item found for #' + q);
+        });
+        return;
+      }
+      if (q.length < 2) {
+        statusEl.textContent = 'Type at least 2 characters…';
+        renderList([], '');
+        return;
+      }
+      statusEl.textContent = 'Searching…';
+      config.witClientGetter().then(function(c) {
+        var safe = q.replace(/'/g, "''");
+        var proj = config.projectName || '';
+        var wiql = { query:
+          'SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS \'' + safe + '\'' +
+          (proj ? ' AND [System.TeamProject] = \'' + proj.replace(/'/g, "''") + '\'' : '') +
+          ' AND [System.State] NOT IN (\'Closed\',\'Done\',\'Removed\',\'Resolved\',\'Completed\')' +
+          ' ORDER BY [System.ChangedDate] DESC'
+        };
+        return c.queryByWiql(wiql, proj ? { project: proj } : null, false, 20)
+          .then(function(res) {
+            var ids = (res.workItems || []).map(function(w) { return w.id; }).slice(0, 20);
+            if (!ids.length) return [];
+            return c.getWorkItems(ids, proj || null,
+              ['System.Id', 'System.Title', 'System.WorkItemType'], null, null, 2)
+              .then(function(rows) {
+                return (rows || []).map(function(wi) {
+                  return { id: wi.id, title: wi.fields['System.Title'], type: wi.fields['System.WorkItemType'] };
+                });
+              });
+          });
+      }).then(function(results) {
+        statusEl.textContent = '';
+        if (!results.length) {
+          document.getElementById('tcItemList').innerHTML =
+            '<div class="tc-item-empty">No results for &ldquo;' + escapeHtml(q) + '&rdquo;</div>';
+        } else {
+          renderList(results, null);
+        }
+      }).catch(function() {
+        statusEl.textContent = '';
+        renderList([], 'Search failed — check your connection');
+      });
+    }
+
+    function doSave() {
+      var hours = parseFloat(document.getElementById('tcHours').value);
+      var date  = document.getElementById('tcDate').value;
+      var desc  = document.getElementById('tcDesc').value.trim();
+      var msgEl = document.getElementById('tcFormMsg');
+      function showErr(msg) {
+        msgEl.textContent = msg;
+        msgEl.className = 'message error';
+        msgEl.style.display = '';
+      }
+      if (!selectedItem)                      { showErr('Select a work item first'); return; }
+      if (!hours || hours <= 0 || hours > 24) { showErr('Enter valid hours (0.25–24)'); return; }
+      if (!date)                              { showErr('Pick a date'); return; }
+
+      var saveBtn = document.getElementById('tcSaveBtn');
+      saveBtn.disabled = true;
+      msgEl.style.display = 'none';
+
+      config.witClientGetter().then(function(c) {
+        return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+          { hours: hours, date: date, description: desc });
+      }).then(function(entry) {
+        return saveEntry(config.dataService, entry);
+      }).then(function() {
+        close();
+        if (config.onSaved) config.onSaved();
+      }).catch(function(e) {
+        showErr('Error: ' + (e && e.message ? e.message : 'could not save'));
+        saveBtn.disabled = false;
+      });
+    }
+
+    document.getElementById('tcSearchInput').addEventListener('input', function(ev) {
+      clearTimeout(searchTimer);
+      var q = ev.target.value;
+      searchTimer = setTimeout(function() { doSearch(q); }, 300);
+    });
+    document.getElementById('tcSelectedChip').addEventListener('click', openSearch);
+    document.getElementById('tcSaveBtn').addEventListener('click', doSave);
+    document.getElementById('tcAddClose').addEventListener('click', close);
+    backdrop.addEventListener('click', function(ev) { if (ev.target === backdrop) close(); });
+    function onEsc(ev) { if (ev.key === 'Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+
+    // Pre-fill for edit mode, otherwise start with the search open
+    if (config.initialItem) {
+      selectItem(config.initialItem);
+      if (config.initialHours !== undefined) document.getElementById('tcHours').value = config.initialHours;
+      if (config.initialDate)               document.getElementById('tcDate').value  = config.initialDate;
+      if (config.initialDesc)               document.getElementById('tcDesc').value  = config.initialDesc;
+    } else {
+      openSearch();
+    }
+  }
+
   global.TimeCore = {
     STORAGE_KEY_PREFIX: STORAGE_KEY_PREFIX,
     CLIENT_FIELD_REFS: CLIENT_FIELD_REFS,
@@ -308,6 +559,7 @@
     DELETE_ICON: DELETE_ICON,
     escapeHtml: escapeHtml,
     updateEntry: updateEntry,
-    buildEntryForWorkItem: buildEntryForWorkItem
+    buildEntryForWorkItem: buildEntryForWorkItem,
+    openAddEntryModal: openAddEntryModal
   };
 })(window);

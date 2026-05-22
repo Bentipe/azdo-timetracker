@@ -295,3 +295,136 @@ tr:hover td {
 /* Table links */
 td a { color: var(--accent); text-decoration: none; }
 td a:hover { text-decoration: underline; }
+
+/* ================================================================
+   Add-entry button (filter bar, far right)
+   ================================================================ */
+.filters-add { margin-left: auto; display: flex; align-items: flex-end; }
+
+.add-entry-btn {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  border: 1px solid var(--border-input) !important;
+  padding: 5px 12px !important;
+  border-radius: 3px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.add-entry-btn:hover {
+  color: var(--accent) !important;
+  border-color: var(--accent) !important;
+  background: var(--bg-accent-light) !important;
+}
+
+/* ================================================================
+   Add-entry modal: work item picker
+   ================================================================ */
+.tc-add-modal { max-width: 520px; width: 100%; }
+
+.tc-add-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.tc-add-header h3 { margin: 0; }
+
+.tc-modal-close {
+  background: transparent !important;
+  border: none;
+  color: var(--text-secondary) !important;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.tc-modal-close:hover { background: var(--bg-row-hover) !important; color: var(--text-primary) !important; }
+
+.tc-search-input { width: 100%; box-sizing: border-box; }
+
+.tc-search-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 18px;
+  margin: 4px 0;
+}
+
+.tc-item-list {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.tc-item-group {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
+
+.tc-item-row {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 !important;
+  padding: 8px 12px !important;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tc-item-row:last-child { border-bottom: none; }
+.tc-item-row:hover { background: var(--bg-row-hover) !important; }
+
+.tc-item-type {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-accent-light);
+  color: var(--accent);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tc-item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tc-item-empty { padding: 20px 12px; color: var(--text-secondary); font-size: 13px; text-align: center; }
+
+/* Selected work item chip — a clickable button that reopens the search */
+.tc-selected-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-header) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 4px;
+  padding: 8px 12px !important;
+  margin-bottom: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tc-selected-chip:hover {
+  border-color: var(--accent) !important;
+  background: var(--bg-accent-light) !important;
+}
+/* Pencil icon: faintly visible at rest, full opacity on hover */
+.tc-chip-pencil { margin-left: auto; flex-shrink: 0; opacity: 0.25; }
+.tc-selected-chip:hover .tc-chip-pencil { opacity: 0.8; }
