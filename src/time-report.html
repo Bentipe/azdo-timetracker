@@ -7,6 +7,7 @@
   <script src="../lib/VSS.SDK.min.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-report.css">
+  <script src="time-core.js"></script>
 </head>
 <body>
   <h1>Time Reports</h1>
@@ -150,8 +151,10 @@
     let currentUser = null;
     var collectionUri = "";
     var currentProjectName = "";
-    var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
-    var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+    var TC = window.TimeCore;
+    var EDIT_ICON = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
+    var escapeHtml = TC.escapeHtml;
     var editingEntryId = null;
     var editingEntryOriginalDate = null;
 
@@ -189,14 +192,6 @@
       VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
         nav.setHash(hashStr);
       });
-    }
-
-    // Helper function to get storage key for a given date
-    function getStorageKeyForDate(dateString) {
-      var date = new Date(dateString);
-      var year = date.getFullYear();
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      return STORAGE_KEY_PREFIX + year + "_" + month;
     }
 
     // Get all months between two dates
@@ -1131,23 +1126,12 @@
       return base + "/" + encodeURIComponent(proj) + "/_workitems/edit/" + entry.workItemId;
     }
 
-    function deleteEntryById(entryId, entryDate) {
-      var storageKey = getStorageKeyForDate(entryDate);
-      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
-        if (!data || data.length === 0) {
-          throw new Error("No entries found for this month");
-        }
-        var filtered = data.filter(function(e) { return e.id !== entryId; });
-        return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
-      });
-    }
-
     function deleteEntry(entryId) {
       if (!confirm("Delete this time entry?")) return;
       var entry = allEntries.find(function(e) { return e.id === entryId; });
       if (!entry) { alert("Entry not found"); return; }
       if (!currentUser || entry.userId !== currentUser.id) { alert("You can only delete your own entries"); return; }
-      deleteEntryById(entryId, entry.date).then(function() {
+      TC.deleteEntryById(window.dataService, entryId, entry.date).then(function() {
         loadAllEntries();
       }, function() {
         alert("Failed to delete entry");
@@ -1176,7 +1160,6 @@
       var hours = parseFloat(document.getElementById("editHours").value);
       var date = document.getElementById("editDate").value;
       var description = document.getElementById("editDescription").value;
-
       if (!hours || hours <= 0 || hours > 24) {
         alert("Please enter valid hours (0.25 - 24)");
         return;
@@ -1185,57 +1168,15 @@
         alert("Please select a date");
         return;
       }
-
       document.getElementById("editSaveBtn").disabled = true;
-
-      var originalKey = getStorageKeyForDate(editingEntryOriginalDate);
-      var newKey = getStorageKeyForDate(date);
-
-      if (originalKey === newKey) {
-        window.dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
-          var updated = (data || []).map(function(e) {
-            if (e.id === editingEntryId) {
-              return Object.assign({}, e, { hours: hours, date: date, description: description });
-            }
-            return e;
-          });
-          return window.dataService.setValue(originalKey, updated, { scopeType: "Default" });
-        }).then(function() {
+      TC.updateEntry(window.dataService, editingEntryId, editingEntryOriginalDate, { hours: hours, date: date, description: description })
+        .then(function() {
           closeEditModal();
           loadAllEntries();
         }, function() {
           alert("Failed to update entry");
           document.getElementById("editSaveBtn").disabled = false;
         });
-      } else {
-        Promise.all([
-          window.dataService.getValue(originalKey, { scopeType: "Default" }),
-          window.dataService.getValue(newKey, { scopeType: "Default" })
-        ]).then(function(results) {
-          var oldEntries = results[0] || [];
-          var newEntries = results[1] || [];
-          var entryToMove = oldEntries.find(function(e) { return e.id === editingEntryId; });
-          if (!entryToMove) { throw new Error("Entry not found in original month"); }
-          var updatedEntry = Object.assign({}, entryToMove, { hours: hours, date: date, description: description });
-          // Write to new month first; only remove from old month after that succeeds
-          return window.dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
-            return window.dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== editingEntryId; }), { scopeType: "Default" });
-          });
-        }).then(function() {
-          closeEditModal();
-          loadAllEntries();
-        }, function() {
-          alert("Failed to update entry");
-          document.getElementById("editSaveBtn").disabled = false;
-        });
-      }
-    }
-
-    function escapeHtml(text) {
-      if (!text) return "";
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
     }
   </script>
 

@@ -5,6 +5,7 @@
   <title>Time Entry</title>
   <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme) / saved user-theme; default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-entry.css">
 </head>
@@ -81,7 +82,19 @@
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
+        // IMPORTANT — keep this simple toggle, do NOT copy the hub-page version here.
+        //
+        // This page runs as a sandboxed work-item-form contribution (cross-origin
+        // iframe). VSS context theme values are unreliable in this context, so the
+        // best-effort toggle below may be wrong. It does not matter: the async
+        // dataService.getValue('user-theme') call further down always overwrites it
+        // once it resolves. That async read is the real source of truth here.
+        //
+        // The hub-page version of applyIfExplicit returns false for unrecognised
+        // theme strings, letting execution fall through to the luminance-based
+        // parent-page background read. That fallback throws (cross-origin) in a
+        // sandboxed iframe, causing a flash to the wrong theme. Always returning
+        // true here prevents that fallback from running at all.
         document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
         return true;
       }
@@ -116,18 +129,12 @@
     let currentUser = null;
     const STORAGE_KEY_PREFIX = "timetracker_";
     const LEGACY_STORAGE_KEY = "timetracker_entries";
-    var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
-    var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+    var TC = window.TimeCore;
+    var EDIT_ICON = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
+    var escapeHtml = TC.escapeHtml;
     var editingEntryId = null;
     var editingEntryOriginalDate = null;
-
-    // Helper function to get storage key for a given date
-    function getStorageKeyForDate(dateString) {
-      var date = new Date(dateString);
-      var year = date.getFullYear();
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      return STORAGE_KEY_PREFIX + year + "_" + month;
-    }
 
     // Wait for VSS SDK to be available
     function initializeExtension() {
@@ -236,7 +243,7 @@
         // Group entries by month
         var entriesByMonth = {};
         legacyData.forEach(function(entry) {
-          var key = getStorageKeyForDate(entry.date);
+          var key = TC.getStorageKeyForDate(entry.date);
           if (!entriesByMonth[key]) {
             entriesByMonth[key] = [];
           }
@@ -301,7 +308,7 @@
 
     // Save a new entry to the appropriate monthly partition
     function saveEntry(entry) {
-      var storageKey = getStorageKeyForDate(entry.date);
+      var storageKey = TC.getStorageKeyForDate(entry.date);
       console.log("[TimeTracker] Saving entry to partition:", storageKey, "Entry:", entry);
 
       return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
@@ -316,21 +323,6 @@
       }, function(err) {
         console.error("[TimeTracker] Save failed:", err);
         throw err;
-      });
-    }
-
-    // Delete an entry from its monthly partition
-    function deleteEntryById(entryId, entryDate) {
-      var storageKey = getStorageKeyForDate(entryDate);
-
-      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
-        if (!data || data.length === 0) {
-          throw new Error("No entries found for this month — aborting delete to prevent data loss");
-        }
-        var filtered = data.filter(function(e) {
-          return e.id !== entryId;
-        });
-        return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
       });
     }
 
@@ -580,17 +572,11 @@
           return;
         }
 
-        return deleteEntryById(entryId, entry.date);
+        return TC.deleteEntryById(window.dataService, entryId, entry.date);
       }).then(function() {
         showMessage("Entry deleted", "success");
         loadTimeEntries();
       });
-    }
-
-    function escapeHtml(text) {
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
     }
 
     // Setup field observer for state changes
@@ -642,11 +628,8 @@
       // Set default date to today
       nudgeDate.valueAsDate = new Date();
 
-      // Show the banner with animation
       banner.style.display = "block";
-
-      // Scroll to top to make it visible
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      document.getElementById("app").scrollTo({ top: 0, behavior: "smooth" });
     }
 
     // Dismiss the nudge banner
@@ -708,7 +691,6 @@
       var hours = parseFloat(document.getElementById("editHours").value);
       var date = document.getElementById("editDate").value;
       var description = document.getElementById("editDescription").value;
-
       if (!hours || hours <= 0 || hours > 24) {
         showMessage("Please enter valid hours (0.25 - 24)", "error");
         return;
@@ -717,22 +699,9 @@
         showMessage("Please select a date", "error");
         return;
       }
-
       document.getElementById("editSaveBtn").disabled = true;
-
-      var originalKey = getStorageKeyForDate(editingEntryOriginalDate);
-      var newKey = getStorageKeyForDate(date);
-
-      if (originalKey === newKey) {
-        window.dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
-          var updated = (data || []).map(function(e) {
-            if (e.id === editingEntryId) {
-              return Object.assign({}, e, { hours: hours, date: date, description: description });
-            }
-            return e;
-          });
-          return window.dataService.setValue(originalKey, updated, { scopeType: "Default" });
-        }).then(function() {
+      TC.updateEntry(window.dataService, editingEntryId, editingEntryOriginalDate, { hours: hours, date: date, description: description })
+        .then(function() {
           showMessage("Entry updated", "success");
           closeEditModal();
           loadTimeEntries();
@@ -740,29 +709,6 @@
           showMessage("Failed to update entry", "error");
           document.getElementById("editSaveBtn").disabled = false;
         });
-      } else {
-        Promise.all([
-          window.dataService.getValue(originalKey, { scopeType: "Default" }),
-          window.dataService.getValue(newKey, { scopeType: "Default" })
-        ]).then(function(results) {
-          var oldEntries = results[0] || [];
-          var newEntries = results[1] || [];
-          var entryToMove = oldEntries.find(function(e) { return e.id === editingEntryId; });
-          if (!entryToMove) { throw new Error("Entry not found in original month"); }
-          var updatedEntry = Object.assign({}, entryToMove, { hours: hours, date: date, description: description });
-          // Write to new month first; only remove from old month after that succeeds
-          return window.dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
-            return window.dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== editingEntryId; }), { scopeType: "Default" });
-          });
-        }).then(function() {
-          showMessage("Entry updated", "success");
-          closeEditModal();
-          loadTimeEntries();
-        }, function() {
-          showMessage("Failed to update entry", "error");
-          document.getElementById("editSaveBtn").disabled = false;
-        });
-      }
     }
   </script>
 </body>

@@ -32,6 +32,7 @@
     </div>
   </div>
 
+  <div class="page-scroll">
   <div id="loading" class="loading">Loading…</div>
 
   <div id="content" style="display:none;">
@@ -57,7 +58,13 @@
     </div>
 
     <div class="section">
-      <div class="section-title">This Week</div>
+      <div class="section-header">
+        <div class="section-title" id="weekTitle">This Week</div>
+        <div class="week-nav">
+          <button class="secondary week-nav-btn" onclick="browseWeek(-1)" title="Previous week">&#8249;</button>
+          <button class="secondary week-nav-btn" id="weekNextBtn" onclick="browseWeek(1)" title="Next week" disabled>&#8250;</button>
+        </div>
+      </div>
       <div class="week-strip" id="weekStrip"></div>
     </div>
 
@@ -94,14 +101,22 @@
       </div>
     </div>
   </div>
+  </div><!-- /.page-scroll -->
 
   <script>
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
-        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
-        return true;
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
+        return false;
       }
       var t = '';
       try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
@@ -129,12 +144,19 @@
 
     console.log("[MyTime] Script started");
     var TC = window.TimeCore;
+    var escapeHtml = TC.escapeHtml;
+    var EDIT_ICON  = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
     var currentUser = null;
     var witClient = null;
+    var collectionUri = "";
+    var weekOffset = 0;
     var allMyEntries = [];      // user's entries across the loaded window (live KPI math)
     var filteredEntries = [];   // allMyEntries within the selected From/To range
     var assignedItems = [];     // active work items assigned to @Me
     var closedEntryItemIds = {}; // { idString: true } — entry-only items whose CURRENT state is closed
+    var editingEntryId = null;
+    var editingEntryOriginalDate = null;
 
     var EXCLUDED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
 
@@ -154,6 +176,7 @@
 
           var ctx = VSS.getWebContext();
           currentUser = ctx.user;
+          collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
           window.__projectName = ctx.project && ctx.project.name;
 
           var first = (currentUser.name || "").split(/[ ,]/)[0] || currentUser.name;
@@ -362,9 +385,41 @@
       return list.reduce(function(s, e){ return s + (e.hours || 0); }, 0);
     }
 
+    function getViewWeek() {
+      if (weekOffset === 0) return TC.weekDates();
+      var ref = new Date();
+      ref.setDate(ref.getDate() + weekOffset * 7);
+      return TC.weekDates(ref);
+    }
+
+    function browseWeek(delta) {
+      weekOffset += delta;
+      if (weekOffset > 0) weekOffset = 0;
+      renderWeekSection();
+    }
+
+    function renderWeekSection() {
+      var week = getViewWeek();
+      var today = TC.todayISO();
+      renderWeekStrip(week, today);
+      var title;
+      if (weekOffset === 0) {
+        title = 'This Week';
+      } else if (weekOffset === -1) {
+        title = 'Last Week';
+      } else {
+        var d0 = new Date(week[0] + 'T00:00:00');
+        var d6 = new Date(week[6] + 'T00:00:00');
+        title = 'Week of ' + d0.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+                ' – ' + d6.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+      document.getElementById('weekTitle').textContent = title;
+      document.getElementById('weekNextBtn').disabled = weekOffset >= 0;
+    }
+
     function render() {
       var today = TC.todayISO();
-      var week = TC.weekDates();          // Mon..Sun ISO strings
+      var week = TC.weekDates();          // current week for KPI cards + work table
       var weekSet = {};
       week.forEach(function(d){ weekSet[d] = true; });
       var monthPrefix = today.slice(0, 7); // YYYY-MM
@@ -377,7 +432,7 @@
       setCard("cardWeek", weekHours);
       setCard("cardMonth", monthHours);
 
-      renderWeekStrip(week, today);
+      renderWeekSection();
       var untracked = renderWorkTable(week, weekSet);
       document.getElementById("cardUntracked").textContent = untracked;
       document.getElementById("cardUntrackedWrap").classList.toggle("is-warn", untracked > 0);
@@ -487,10 +542,14 @@
         var parent = r.parentTitle
           ? escapeHtml(r.parentTitle) + (r.parentType ? ' <span class="muted">(' + escapeHtml(r.parentType) + ')</span>' : '')
           : '<span class="muted">—</span>';
+        var wiUrl = getWorkItemUrl(r.id, window.__projectName);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer" class="wi-id">#' + r.id + '</a>'
+          : '<span class="wi-id">#' + r.id + '</span>';
         return '<tr>' +
           '<td>' + typeBadge +
             '<span class="wi-title">' + escapeHtml(r.title || "(untitled)") + '</span> ' +
-            '<span class="wi-id">#' + r.id + '</span>' + nudge + '</td>' +
+            wiIdLabel + nudge + '</td>' +
           '<td>' + parent + '</td>' +
           '<td>' + (r.weekHours ? '<strong>' + r.weekHours.toFixed(1) + 'h</strong>' : '<span class="muted">—</span>') + '</td>' +
           '<td>' + (r.recentHours ? r.recentHours.toFixed(1) + 'h' : '<span class="muted">—</span>') + '</td>' +
@@ -521,12 +580,19 @@
       }
       empty.style.display = "none";
       body.innerHTML = sorted.map(function(e) {
+        var wiUrl = getWorkItemUrl(e.workItemId, e.teamProject);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer" class="wi-id">#' + e.workItemId + '</a>'
+          : '<span class="wi-id">#' + e.workItemId + '</span>';
         return '<tr>' +
           '<td>' + e.date + '</td>' +
-          '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> <span class="wi-id">#' + e.workItemId + '</span></td>' +
+          '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> ' + wiIdLabel + '</td>' +
           '<td>' + (e.description ? escapeHtml(e.description) : '<span class="muted">—</span>') + '</td>' +
           '<td><strong>' + e.hours + 'h</strong></td>' +
-          '<td><button class="delete-btn" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">Delete</button></td>' +
+          '<td class="actions-cell">' +
+            '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
+            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">' + DELETE_ICON + '</button>' +
+          '</td>' +
         '</tr>';
       }).join("");
     }
@@ -556,6 +622,48 @@
       });
     }
 
+    function getWorkItemUrl(wiId, teamProject) {
+      var base = collectionUri.replace(/\/$/, "");
+      var proj = teamProject || window.__projectName || "";
+      if (!base || !proj) return null;
+      return base + "/" + encodeURIComponent(proj) + "/_workitems/edit/" + wiId;
+    }
+
+    function editEntry(entryId) {
+      var entry = allMyEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { showMessage("Entry not found", "error"); return; }
+      editingEntryId = entryId;
+      editingEntryOriginalDate = entry.date;
+      document.getElementById("editHours").value = entry.hours;
+      document.getElementById("editDate").value = entry.date;
+      document.getElementById("editDescription").value = entry.description || "";
+      document.getElementById("editModal").style.display = "flex";
+    }
+
+    function closeEditModal() {
+      document.getElementById("editModal").style.display = "none";
+      editingEntryId = null;
+      editingEntryOriginalDate = null;
+    }
+
+    function saveEditEntry() {
+      var hours = parseFloat(document.getElementById("editHours").value);
+      var date = document.getElementById("editDate").value;
+      var description = document.getElementById("editDescription").value;
+      if (!hours || hours <= 0 || hours > 24) { showMessage("Enter valid hours (0.25 – 24)", "error"); return; }
+      if (!date) { showMessage("Pick a date", "error"); return; }
+      document.getElementById("editSaveBtn").disabled = true;
+      TC.updateEntry(window.dataService, editingEntryId, editingEntryOriginalDate, { hours: hours, date: date, description: description })
+        .then(function() {
+          showMessage("Entry updated", "success");
+          closeEditModal();
+          return reloadAll();
+        }, function() {
+          showMessage("Failed to update entry", "error");
+          document.getElementById("editSaveBtn").disabled = false;
+        });
+    }
+
     function deleteEntry(entryId, entryDate) {
       if (!confirm("Delete this time entry?")) return;
       TC.deleteEntryById(window.dataService, entryId, entryDate).then(function() {
@@ -572,16 +680,31 @@
       msg.textContent = text;
       msg.className = "message " + type;
       msg.style.display = "block";
-      window.scrollTo({ top: 0, behavior: "smooth" });
       setTimeout(function(){ msg.style.display = "none"; }, 3500);
     }
 
-    function escapeHtml(text) {
-      if (text == null) return "";
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
-    }
   </script>
+
+  <div id="editModal" class="edit-modal-backdrop" style="display:none;">
+    <div class="edit-modal-content">
+      <h3>Edit Time Entry</h3>
+      <div class="filter-group">
+        <label for="editHours">Hours Spent</label>
+        <input type="number" id="editHours" min="0.25" max="24" step="0.25" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
+      </div>
+      <div class="filter-group">
+        <label for="editDate">Date</label>
+        <input type="date" id="editDate">
+      </div>
+      <div class="filter-group">
+        <label for="editDescription">Description (optional, max 100 chars)</label>
+        <textarea id="editDescription" rows="3" maxlength="100" style="resize:vertical;"></textarea>
+      </div>
+      <div class="edit-modal-actions">
+        <button id="editSaveBtn" onclick="saveEditEntry()">Save</button>
+        <button class="secondary" onclick="closeEditModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

@@ -151,6 +151,43 @@
     });
   }
 
+  var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+  var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+  function escapeHtml(text) {
+    if (text == null) return "";
+    var div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function updateEntry(dataService, entryId, originalDate, updates) {
+    var originalKey = getStorageKeyForDate(originalDate);
+    var newKey = getStorageKeyForDate(updates.date);
+    if (originalKey === newKey) {
+      return dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
+        var updated = (data || []).map(function(e) {
+          if (e.id !== entryId) return e;
+          return Object.assign({}, e, updates);
+        });
+        return dataService.setValue(originalKey, updated, { scopeType: "Default" });
+      });
+    }
+    return Promise.all([
+      dataService.getValue(originalKey, { scopeType: "Default" }),
+      dataService.getValue(newKey, { scopeType: "Default" })
+    ]).then(function(results) {
+      var oldEntries = results[0] || [];
+      var newEntries = results[1] || [];
+      var entryToMove = oldEntries.find(function(e) { return e.id === entryId; });
+      if (!entryToMove) throw new Error("Entry not found in original month");
+      var updatedEntry = Object.assign({}, entryToMove, updates);
+      return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
+        return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" });
+      });
+    });
+  }
+
   // ---- Entry construction with parent/epic inheritance -------------
   // Mirrors processWorkItem() in time-entry.html. Resolves with the
   // built entry; the caller is responsible for persisting it.
@@ -267,6 +304,10 @@
     loadEntriesForKeys: loadEntriesForKeys,
     saveEntry: saveEntry,
     deleteEntryById: deleteEntryById,
+    EDIT_ICON: EDIT_ICON,
+    DELETE_ICON: DELETE_ICON,
+    escapeHtml: escapeHtml,
+    updateEntry: updateEntry,
     buildEntryForWorkItem: buildEntryForWorkItem
   };
 })(window);

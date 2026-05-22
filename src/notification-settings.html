@@ -87,9 +87,16 @@
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
-        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
-        return true;
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
+        return false;
       }
       var t = '';
       try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
