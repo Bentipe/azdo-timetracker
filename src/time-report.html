@@ -161,8 +161,6 @@
     var EDIT_ICON = TC.EDIT_ICON;
     var DELETE_ICON = TC.DELETE_ICON;
     var escapeHtml = TC.escapeHtml;
-    var editingEntryId = null;
-    var editingEntryOriginalDate = null;
     var _witClient = null;
 
     function getWitClient() {
@@ -1178,66 +1176,35 @@
 
     function editEntry(entryId) {
       var entry = allEntries.find(function(e) { return e.id === entryId; });
-      if (!entry) { alert("Entry not found"); return; }
-      if (!currentUser || entry.userId !== currentUser.id) { alert("You can only edit your own entries"); return; }
-      editingEntryId = entryId;
-      editingEntryOriginalDate = entry.date;
-      document.getElementById("editHours").value = entry.hours;
-      document.getElementById("editDate").value = entry.date;
-      document.getElementById("editDescription").value = entry.description || "";
-      document.getElementById("editModal").style.display = "flex";
-    }
-
-    function closeEditModal() {
-      document.getElementById("editModal").style.display = "none";
-      editingEntryId = null;
-      editingEntryOriginalDate = null;
-    }
-
-    function saveEditEntry() {
-      var hours = parseFloat(document.getElementById("editHours").value);
-      var date = document.getElementById("editDate").value;
-      var description = document.getElementById("editDescription").value;
-      if (!hours || hours <= 0 || hours > 24) {
-        alert("Please enter valid hours (0.25 - 24)");
-        return;
-      }
-      if (!date) {
-        alert("Please select a date");
-        return;
-      }
-      document.getElementById("editSaveBtn").disabled = true;
-      TC.updateEntry(window.dataService, editingEntryId, editingEntryOriginalDate, { hours: hours, date: date, description: description })
-        .then(function() {
-          closeEditModal();
-          loadAllEntries();
-        }, function() {
-          alert("Failed to update entry");
-          document.getElementById("editSaveBtn").disabled = false;
-        });
+      if (!entry) { alert('Entry not found'); return; }
+      if (!currentUser || entry.userId !== currentUser.id) { alert('You can only edit your own entries'); return; }
+      var seen = {}, recent = [];
+      allEntries.filter(function(e) {
+        return currentUser && String(e.userId) === String(currentUser.id);
+      }).slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: currentProjectName,
+        recentItems: recent.slice(0, 20),
+        title: 'Edit Time Entry',
+        saveLabel: 'Save',
+        initialItem: { id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null },
+        initialHours: entry.hours,
+        initialDate: entry.date,
+        initialDesc: entry.description,
+        entryId: entry.id,
+        originalDate: entry.date,
+        onSaved: function() { loadAllEntries(); }
+      });
     }
   </script>
 
-  <div id="editModal" class="edit-modal-backdrop" style="display:none;">
-    <div class="edit-modal-content">
-      <h3>Edit Time Entry</h3>
-      <div class="filter-group">
-        <label for="editHours">Hours Spent</label>
-        <input type="number" id="editHours" min="0.25" max="24" step="0.25" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
-      </div>
-      <div class="filter-group">
-        <label for="editDate">Date</label>
-        <input type="date" id="editDate">
-      </div>
-      <div class="filter-group">
-        <label for="editDescription">Description (optional, max 100 chars)</label>
-        <textarea id="editDescription" rows="3" maxlength="100" style="resize:vertical;"></textarea>
-      </div>
-      <div class="edit-modal-actions">
-        <button id="editSaveBtn" onclick="saveEditEntry()">Save</button>
-        <button class="secondary" onclick="closeEditModal()">Cancel</button>
-      </div>
-    </div>
-  </div>
 </body>
 </html>

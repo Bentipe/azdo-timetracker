@@ -299,13 +299,15 @@
   //   projectName     — scopes the WIQL title search
   //   recentItems     — [{ id, title, type }] shown before the user types
   //   onSaved         — () called after a successful save
-  //   // Pre-fill for future edit use:
   //   title           — modal heading (default "Log Time")
   //   saveLabel       — save button label (default "Log Time")
   //   initialItem     — { id, title, type } pre-selected work item
   //   initialHours    — number
   //   initialDate     — "YYYY-MM-DD"
   //   initialDesc     — string
+  //   // Edit mode (update existing entry):
+  //   entryId         — id of the entry being edited
+  //   originalDate    — entry.date at load time (for storage key lookup)
   // }
   function openAddEntryModal(config) {
     var old = document.getElementById('tcAddModal');
@@ -501,12 +503,28 @@
       saveBtn.disabled = true;
       msgEl.style.display = 'none';
 
-      config.witClientGetter().then(function(c) {
-        return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+      var sameItem = config.entryId && config.initialItem && selectedItem.id === config.initialItem.id;
+      var p;
+      if (config.entryId && sameItem) {
+        p = updateEntry(config.dataService, config.entryId, config.originalDate,
           { hours: hours, date: date, description: desc });
-      }).then(function(entry) {
-        return saveEntry(config.dataService, entry);
-      }).then(function() {
+      } else if (config.entryId) {
+        p = config.witClientGetter().then(function(c) {
+          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc });
+        }).then(function(newEntry) {
+          return deleteEntryById(config.dataService, config.entryId, config.originalDate)
+            .then(function() { return saveEntry(config.dataService, newEntry); });
+        });
+      } else {
+        p = config.witClientGetter().then(function(c) {
+          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc });
+        }).then(function(entry) {
+          return saveEntry(config.dataService, entry);
+        });
+      }
+      p.then(function() {
         close();
         if (config.onSaved) config.onSaved();
       }).catch(function(e) {

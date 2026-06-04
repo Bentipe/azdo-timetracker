@@ -41,32 +41,34 @@ schedules:
 
 trigger: none
 
-pool:
-  name: Default   # your self-hosted agent pool
+jobs:
+  - job: SendWeeklySummary
+    timeoutInMinutes: 70
+    pool:
+      name: Default
+    steps:
+      - task: NodeTool@0
+        displayName: Use Node.js 16
+        inputs:
+          versionSpec: '16.x'
 
-steps:
-  - task: NodeTool@0
-    displayName: Use Node.js 16
-    inputs:
-      versionSpec: '16.x'
+      - script: npm install --production
+        displayName: Install script dependencies
+        workingDirectory: $(Build.SourcesDirectory)/scripts
 
-  - script: npm install --production
-    displayName: Install script dependencies
-    workingDirectory: $(Build.SourcesDirectory)/scripts
-
-  - script: node send-weekly-summary.js
-    displayName: Send weekly hour summary emails
-    workingDirectory: $(Build.SourcesDirectory)/scripts
-    env:
-      AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
-      AZDO_PAT:               $(AZDO_PAT)
-      AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
-      AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
-      SMTP_HOST:              $(SMTP_HOST)
-      SMTP_PORT:              $(SMTP_PORT)
-      SMTP_FROM:              $(SMTP_FROM)
-      SMTP_SECURE:            $(SMTP_SECURE)
-      SMTP_USER:              $(SMTP_USER)
-      SMTP_PASS:              $(SMTP_PASS)
-      OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
-      DRY_RUN:                ${{ parameters.dry_run }}
+      - script: node send-weekly-summary.js
+        displayName: Send weekly hour summary emails
+        workingDirectory: $(Build.SourcesDirectory)/scripts
+        env:
+          AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
+          AZDO_PAT:               $(AZDO_PAT)
+          AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
+          AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
+          SMTP_HOST:              $(SMTP_HOST)
+          SMTP_PORT:              $(SMTP_PORT)
+          SMTP_FROM:              $(SMTP_FROM)
+          SMTP_SECURE:            $(SMTP_SECURE)
+          SMTP_USER:              $(SMTP_USER)
+          SMTP_PASS:              $(SMTP_PASS)
+          OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
+          DRY_RUN:                ${{ parameters.dry_run }}

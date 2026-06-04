@@ -56,28 +56,6 @@
     </div>
   </div>
 
-  <div id="editModal" class="edit-modal-backdrop" style="display:none;">
-    <div class="edit-modal-content">
-      <h3 style="margin:0;">Edit Time Entry</h3>
-      <div class="form-group">
-        <label for="editHours">Hours Spent</label>
-        <input type="number" id="editHours" min="0.25" max="24" step="0.25" onkeydown="return event.key !== 'e' && event.key !== 'E' && event.key !== '+' && event.key !== '-'">
-      </div>
-      <div class="form-group">
-        <label for="editDate">Date</label>
-        <input type="date" id="editDate">
-      </div>
-      <div class="form-group">
-        <label for="editDescription">Description (optional, max 100 chars)</label>
-        <textarea id="editDescription" rows="2" maxlength="100"></textarea>
-      </div>
-      <div class="edit-modal-actions">
-        <button id="editSaveBtn" onclick="saveEditEntry()">Save</button>
-        <button class="secondary" onclick="closeEditModal()">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <script>
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
@@ -133,8 +111,16 @@
     var EDIT_ICON = TC.EDIT_ICON;
     var DELETE_ICON = TC.DELETE_ICON;
     var escapeHtml = TC.escapeHtml;
-    var editingEntryId = null;
-    var editingEntryOriginalDate = null;
+    var witClientCache = null;
+    function getWitClient() {
+      if (witClientCache) return Promise.resolve(witClientCache);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          witClientCache = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(witClientCache);
+        });
+      });
+    }
 
     // Wait for VSS SDK to be available
     function initializeExtension() {
@@ -167,7 +153,7 @@
             console.log("[TimeTracker] Got extension data service");
             window.dataService = dataService;
             // Theme detection is blocked in sandboxed work-item-form iframes.
-            // Hub pages (time-report, notification-settings) save the detected theme
+            // Hub pages (time-report, settings) save the detected theme
             // to ExtensionData; read it here and apply it.
             dataService.getValue('user-theme', { scopeType: 'User' }).then(function(t) {
               if (t === 'dark')  document.documentElement.classList.add('dark');
@@ -176,6 +162,7 @@
 
             var webContext = VSS.getWebContext();
             currentUser = webContext.user;
+            window.__projectName = webContext.project && webContext.project.name;
             console.log("[TimeTracker] Current user:", currentUser.name);
 
             // Register work item notification and field observer
@@ -670,45 +657,25 @@
     function editEntry(entryId) {
       getAllEntries().then(function(entries) {
         var entry = entries.find(function(e) { return e.id === entryId; });
-        if (!entry) { showMessage("Entry not found", "error"); return; }
-        if (!currentUser || entry.userId !== currentUser.id) { showMessage("You can only edit your own entries", "error"); return; }
-        editingEntryId = entryId;
-        editingEntryOriginalDate = entry.date;
-        document.getElementById("editHours").value = entry.hours;
-        document.getElementById("editDate").value = entry.date;
-        document.getElementById("editDescription").value = entry.description || "";
-        document.getElementById("editModal").style.display = "flex";
-      });
-    }
-
-    function closeEditModal() {
-      document.getElementById("editModal").style.display = "none";
-      editingEntryId = null;
-      editingEntryOriginalDate = null;
-    }
-
-    function saveEditEntry() {
-      var hours = parseFloat(document.getElementById("editHours").value);
-      var date = document.getElementById("editDate").value;
-      var description = document.getElementById("editDescription").value;
-      if (!hours || hours <= 0 || hours > 24) {
-        showMessage("Please enter valid hours (0.25 - 24)", "error");
-        return;
-      }
-      if (!date) {
-        showMessage("Please select a date", "error");
-        return;
-      }
-      document.getElementById("editSaveBtn").disabled = true;
-      TC.updateEntry(window.dataService, editingEntryId, editingEntryOriginalDate, { hours: hours, date: date, description: description })
-        .then(function() {
-          showMessage("Entry updated", "success");
-          closeEditModal();
-          loadTimeEntries();
-        }, function() {
-          showMessage("Failed to update entry", "error");
-          document.getElementById("editSaveBtn").disabled = false;
+        if (!entry) { showMessage('Entry not found', 'error'); return; }
+        if (!currentUser || entry.userId !== currentUser.id) { showMessage('You can only edit your own entries', 'error'); return; }
+        TC.openAddEntryModal({
+          dataService: window.dataService,
+          witClientGetter: getWitClient,
+          currentUser: currentUser,
+          projectName: window.__projectName,
+          recentItems: [{ id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null }],
+          title: 'Edit Time Entry',
+          saveLabel: 'Save',
+          initialItem: { id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null },
+          initialHours: entry.hours,
+          initialDate: entry.date,
+          initialDesc: entry.description,
+          entryId: entry.id,
+          originalDate: entry.date,
+          onSaved: function() { showMessage('Entry updated', 'success'); loadTimeEntries(); }
         });
+      });
     }
   </script>
 </body>

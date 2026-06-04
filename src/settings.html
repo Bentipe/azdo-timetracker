@@ -2,15 +2,15 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Notification Settings</title>
+  <title>Settings</title>
   <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
   <link rel="stylesheet" href="theme.css">
-  <link rel="stylesheet" href="notification-settings.css">
+  <link rel="stylesheet" href="settings.css">
 </head>
 <body>
 
-  <h1>Notification Settings</h1>
+  <h1>Settings</h1>
   <p id="subtitle" class="subtitle">Configure weekly hour summary emails.</p>
 
   <div id="checkingAdmin">Checking permissions&hellip;</div>
@@ -24,7 +24,7 @@
 
   <div id="mainContent">
     <div class="info-box">
-      Only users who have logged at least one hour appear in this list.
+      Users who have logged time appear automatically. You can also add users manually below.
       The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
     </div>
 
@@ -67,6 +67,7 @@
               <th class="col-name">Name</th>
               <th class="col-email">Email</th>
               <th class="col-send">Send Email</th>
+              <th class="col-target">Target h/w</th>
               <th>CC &mdash; manager(s), comma-separated</th>
             </tr>
           </thead>
@@ -74,7 +75,14 @@
         </table>
       </div>
       <div id="emptyState" class="empty-state" style="display:none">
-        No users found. Users appear here once they have logged at least one hour.
+        No users yet. Add one below or wait for someone to log their first hour.
+      </div>
+      <div class="add-user-row">
+        <div class="add-user-search-wrap">
+          <input type="text" id="addUserSearch" placeholder="Search ADO users to add&hellip;" autocomplete="off">
+          <div id="addUserResults" class="add-user-results" style="display:none"></div>
+        </div>
+        <span id="addUserMsg" class="status"></span>
       </div>
       <div class="btn-row">
         <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
@@ -130,6 +138,8 @@
 
     var knownUsers = {};  // userId -> { userId, userName, userEmail }
     var savedConfig = {}; // userId -> { emailEnabled, cc }
+    var collectionBase = '';
+    var collectionProject = '';
 
     // -------------------------------------------------------------------------
     // VSS init
@@ -144,6 +154,9 @@
           window.dataService = dataService;
           try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
           VSS.notifyLoadSucceeded();
+          var ctx = VSS.getWebContext();
+          collectionBase    = ctx.collection.uri.replace(/\/$/, '');
+          collectionProject = ctx.project.name;
           checkIsAdmin().then(function(isAdmin) {
             document.getElementById('checkingAdmin').style.display = 'none';
             if (!isAdmin) {
@@ -161,9 +174,11 @@
     }
 
     // -------------------------------------------------------------------------
-    // Admin check — Project Administrators group membership via Identity API.
-    // Fails open (returns true) if the check cannot be completed, so admins
-    // are never accidentally locked out.
+    // Admin check — two-step: find the Project Administrators group ID, then
+    // check if the current user's identity lists that group in memberOf.
+    // Querying the user's memberOf is more reliable than reading the group's
+    // members list, which is often empty for AAD-synced members.
+    // Fails CLOSED (returns false) on any error so non-admins can't slip through.
     // -------------------------------------------------------------------------
 
     function checkIsAdmin() {
@@ -171,36 +186,57 @@
       var base = ctx.collection.uri.replace(/\/$/, '');
       var userId = ctx.user.id;
       var projectName = ctx.project.name;
+      var headers = { 'Accept': 'application/json' };
 
-      var url = base + '/_apis/Identities' +
-                '?subjectTypes=vssgp' +
-                '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
-                '&queryMembership=Direct' +
-                '&api-version=6.0';
+      function normalizeId(id) {
+        return String(id || '').toLowerCase().replace(/[{}]/g, '');
+      }
 
-      return fetch(url, { credentials: 'include', headers: { 'Accept': 'application/json' } })
-        .then(function(r) {
-          if (!r.ok) { console.warn('[NotifSettings] Admin check HTTP', r.status, '— allowing access'); return true; }
+      // On-prem ADO Server uses Windows SIDs as member identifiers, not GUIDs.
+      // We fetch both the group's expanded members (SIDs) and the current user's
+      // identity (to get their SID descriptor), then compare the two.
+      var groupUrl = base + '/_apis/Identities' +
+        '?searchFilter=General' +
+        '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
+        '&queryMembership=Expanded' +
+        '&api-version=5.1';
+
+      var userUrl = base + '/_apis/Identities' +
+        '?identityIds=' + encodeURIComponent(userId) +
+        '&api-version=5.1';
+
+      return Promise.all([
+        fetch(groupUrl, { credentials: 'include', headers: headers }).then(function(r) {
+          if (!r.ok) throw new Error('Group lookup HTTP ' + r.status);
+          return r.json();
+        }),
+        fetch(userUrl, { credentials: 'include', headers: headers }).then(function(r) {
+          if (!r.ok) throw new Error('User lookup HTTP ' + r.status);
           return r.json();
         })
-        .then(function(data) {
-          if (typeof data === 'boolean') return data;
-          if (!data || !data.value || !data.value.length) {
-            console.warn('[NotifSettings] Project Administrators group not found — allowing access');
-            return true;
-          }
-          var members = data.value[0].members || data.value[0].memberIds || [];
-          var isAdmin = members.some(function(m) {
-            var id = typeof m === 'string' ? m : ((m && m.id) || '');
-            return id.toLowerCase() === userId.toLowerCase();
-          });
-          console.log('[NotifSettings] Admin check result:', isAdmin, '| userId:', userId, '| members:', members.length);
-          return isAdmin;
-        })
-        .catch(function(err) {
-          console.warn('[NotifSettings] Admin check error — allowing access:', err);
-          return true;
+      ]).then(function(results) {
+        var groupData = results[0], userData = results[1];
+        if (!groupData || !groupData.value || !groupData.value.length) throw new Error('Group not found');
+        if (!userData  || !userData.value  || !userData.value.length)  throw new Error('User identity not found');
+
+        var members        = groupData.value[0].members || groupData.value[0].memberIds || [];
+        var userDescriptor = userData.value[0].descriptor || '';
+        var normUserId     = normalizeId(userId);
+
+        console.log('[NotifSettings] userId:', userId, '| descriptor:', userDescriptor, '| members:', members.length);
+
+        var isAdmin = members.some(function(m) {
+          var id = typeof m === 'string' ? m : ((m && m.id) || '');
+          return normalizeId(id) === normUserId ||
+                 id.toLowerCase() === userDescriptor.toLowerCase();
         });
+        console.log('[NotifSettings] Admin check result:', isAdmin);
+        return isAdmin;
+      })
+      .catch(function(err) {
+        console.warn('[NotifSettings] Admin check failed — denying access:', err);
+        return false;
+      });
     }
 
     // -------------------------------------------------------------------------
@@ -249,7 +285,11 @@
           function(cfg) {
             if (!cfg) return;
             ((cfg.users) || []).forEach(function(u) {
-              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '' };
+              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0 };
+              // Restore any user that was in a previous save (e.g. manually added, or outside the 3-month window)
+              if (u.userId && !knownUsers[u.userId]) {
+                knownUsers[u.userId] = { userId: u.userId, userName: u.userName || '', userEmail: u.userEmail || '' };
+              }
             });
             if (cfg.schedule) {
               document.getElementById('scheduleDay').value  = cfg.schedule.day  !== undefined ? cfg.schedule.day  : 1;
@@ -321,12 +361,17 @@
       var users = Object.keys(knownUsers).map(function(k) { return knownUsers[k]; });
       users.sort(function(a, b) { return (a.userName || '').localeCompare(b.userName || ''); });
 
+      var emptyState     = document.getElementById('emptyState');
+      var tableContainer = document.getElementById('tableContainer');
+
       if (users.length === 0) {
-        document.getElementById('emptyState').style.display = 'block';
+        emptyState.style.display = 'block';
+        tableContainer.style.display = 'none';
         document.getElementById('saveBtn').disabled = false;
         return;
       }
 
+      emptyState.style.display = 'none';
       var tbody = document.getElementById('userTableBody');
       tbody.innerHTML = '';
       users.forEach(function(u) {
@@ -337,6 +382,7 @@
           '<td>' + escHtml(u.userName) + '</td>' +
           '<td class="text-muted">' + escHtml(u.userEmail) + '</td>' +
           '<td class="toggle-cell"><input type="checkbox" id="chk_' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '></td>' +
+          '<td class="target-cell"><input type="number" id="tgt_' + uid + '" value="' + (cfg.targetHours || '') + '" min="0" max="80" step="0.5" placeholder="—"></td>' +
           '<td><input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com"></td>';
         tbody.appendChild(tr);
       });
@@ -358,11 +404,14 @@
 
       var users = Object.keys(knownUsers).map(function(k) {
         var u = knownUsers[k];
+        var tgtEl = document.getElementById('tgt_' + u.userId);
+        var tgt   = tgtEl ? parseFloat(tgtEl.value) : NaN;
         return {
           userId:       u.userId,
           userName:     u.userName,
           userEmail:    u.userEmail,
           emailEnabled: !!(document.getElementById('chk_' + u.userId) || {}).checked,
+          targetHours:  isNaN(tgt) ? 0 : tgt,
           cc:           ((document.getElementById('cc_' + u.userId) || {}).value || '').trim()
         };
       });
@@ -388,12 +437,110 @@
         });
     }
 
+    var addUserSearchTimer = null;
+
+    function onAddUserInput() {
+      var q   = (document.getElementById('addUserSearch').value || '').trim();
+      var msg = document.getElementById('addUserMsg');
+      var res = document.getElementById('addUserResults');
+      msg.textContent = '';
+      clearTimeout(addUserSearchTimer);
+      if (q.length < 2) { res.style.display = 'none'; res.innerHTML = ''; return; }
+      addUserSearchTimer = setTimeout(function() { searchADOUsers(q); }, 300);
+    }
+
+    function searchADOUsers(q) {
+      var res = document.getElementById('addUserResults');
+      res.innerHTML = '<div class="add-user-result-row muted">Searching…</div>';
+      res.style.display = 'block';
+
+      // IdentityPicker is what ADO uses internally for the Assigned-To picker.
+      // Works on both ADO Server on-prem and ADO cloud.
+      var url = collectionBase + '/_apis/IdentityPicker/Identities?api-version=5.1-preview.1';
+      fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: q,
+          identityTypes: ['user'],
+          operationScopes: ['ims'],
+          queryTypeHint: 'General',
+          properties: ['DisplayName', 'Mail', 'SignInAddress', 'SamAccountName']
+        })
+      })
+      .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP ' + r.status); })
+      .then(function(data) {
+        var identities = [];
+        (data.results || []).forEach(function(r) {
+          (r.identities || []).forEach(function(i) { identities.push(i); });
+        });
+
+        var items = identities.filter(function(i) {
+          if (i.entityType !== 'User') return false;
+          var id    = i.localId || i.entityId;
+          var email = (i.mail || i.signInAddress || '').toLowerCase();
+          if (knownUsers[id]) return false;
+          if (email && Object.keys(knownUsers).some(function(k) {
+            return (knownUsers[k].userEmail || '').toLowerCase() === email;
+          })) return false;
+          return true;
+        });
+
+        if (!items.length) {
+          res.innerHTML = '<div class="add-user-result-row muted">No users found.</div>';
+          return;
+        }
+        res.innerHTML = '';
+        items.forEach(function(identity) {
+          var name  = identity.displayName || identity.samAccountName || '';
+          var email = identity.mail || identity.signInAddress || '';
+          var row   = document.createElement('div');
+          row.className = 'add-user-result-row';
+          row.innerHTML = '<strong>' + escHtml(name) + '</strong>' +
+            (email ? ' <span class="muted">' + escHtml(email) + '</span>' : '');
+          row.addEventListener('click', function() { pickADOUser(identity); });
+          res.appendChild(row);
+        });
+      })
+      .catch(function(err) {
+        console.warn('[NotifSettings] User search failed:', err);
+        res.innerHTML = '<div class="add-user-result-row muted">Search failed.</div>';
+      });
+    }
+
+    function pickADOUser(identity) {
+      var msg   = document.getElementById('addUserMsg');
+      var res   = document.getElementById('addUserResults');
+      var id    = identity.localId || identity.entityId;
+      var name  = identity.displayName || identity.samAccountName || '';
+      var email = identity.mail || identity.signInAddress || '';
+
+      knownUsers[id] = { userId: id, userName: name, userEmail: email };
+
+      document.getElementById('addUserSearch').value = '';
+      res.style.display = 'none';
+      res.innerHTML = '';
+      msg.className = 'status success';
+      msg.textContent = name + ' added — save to persist.';
+
+      renderTable();
+    }
+
     function escHtml(str) {
       return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     initializeExtension();
     updateUtcPreview(); // show default preview before VSS loads
+    document.getElementById('addUserSearch').addEventListener('input', onAddUserInput);
+    document.addEventListener('click', function(e) {
+      // Close results when clicking outside the search
+      if (!e.target.closest('.add-user-search-wrap')) {
+        var res = document.getElementById('addUserResults');
+        res.style.display = 'none';
+      }
+    });
   </script>
 
 </body>
