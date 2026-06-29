@@ -51,6 +51,8 @@ jobs:
     timeoutInMinutes: 70
     pool:
       name: Default
+      demands:
+        - Agent.OS -equals Windows_NT
     steps:
       - task: NodeTool@0
         displayName: Use Node.js 16
