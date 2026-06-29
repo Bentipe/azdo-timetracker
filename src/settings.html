@@ -5,6 +5,7 @@
   <title>Settings</title>
   <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="settings.css">
 </head>
@@ -173,71 +174,7 @@
       });
     }
 
-    // -------------------------------------------------------------------------
-    // Admin check — two-step: find the Project Administrators group ID, then
-    // check if the current user's identity lists that group in memberOf.
-    // Querying the user's memberOf is more reliable than reading the group's
-    // members list, which is often empty for AAD-synced members.
-    // Fails CLOSED (returns false) on any error so non-admins can't slip through.
-    // -------------------------------------------------------------------------
-
-    function checkIsAdmin() {
-      var ctx = VSS.getWebContext();
-      var base = ctx.collection.uri.replace(/\/$/, '');
-      var userId = ctx.user.id;
-      var projectName = ctx.project.name;
-      var headers = { 'Accept': 'application/json' };
-
-      function normalizeId(id) {
-        return String(id || '').toLowerCase().replace(/[{}]/g, '');
-      }
-
-      // On-prem ADO Server uses Windows SIDs as member identifiers, not GUIDs.
-      // We fetch both the group's expanded members (SIDs) and the current user's
-      // identity (to get their SID descriptor), then compare the two.
-      var groupUrl = base + '/_apis/Identities' +
-        '?searchFilter=General' +
-        '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
-        '&queryMembership=Expanded' +
-        '&api-version=5.1';
-
-      var userUrl = base + '/_apis/Identities' +
-        '?identityIds=' + encodeURIComponent(userId) +
-        '&api-version=5.1';
-
-      return Promise.all([
-        fetch(groupUrl, { credentials: 'include', headers: headers }).then(function(r) {
-          if (!r.ok) throw new Error('Group lookup HTTP ' + r.status);
-          return r.json();
-        }),
-        fetch(userUrl, { credentials: 'include', headers: headers }).then(function(r) {
-          if (!r.ok) throw new Error('User lookup HTTP ' + r.status);
-          return r.json();
-        })
-      ]).then(function(results) {
-        var groupData = results[0], userData = results[1];
-        if (!groupData || !groupData.value || !groupData.value.length) throw new Error('Group not found');
-        if (!userData  || !userData.value  || !userData.value.length)  throw new Error('User identity not found');
-
-        var members        = groupData.value[0].members || groupData.value[0].memberIds || [];
-        var userDescriptor = userData.value[0].descriptor || '';
-        var normUserId     = normalizeId(userId);
-
-        console.log('[NotifSettings] userId:', userId, '| descriptor:', userDescriptor, '| members:', members.length);
-
-        var isAdmin = members.some(function(m) {
-          var id = typeof m === 'string' ? m : ((m && m.id) || '');
-          return normalizeId(id) === normUserId ||
-                 id.toLowerCase() === userDescriptor.toLowerCase();
-        });
-        console.log('[NotifSettings] Admin check result:', isAdmin);
-        return isAdmin;
-      })
-      .catch(function(err) {
-        console.warn('[NotifSettings] Admin check failed — denying access:', err);
-        return false;
-      });
-    }
+    var checkIsAdmin = window.TimeCore.checkIsAdmin;
 
     // -------------------------------------------------------------------------
     // Data loading

@@ -56,6 +56,7 @@
       <button class="secondary" onclick="clearFilters()">Clear</button>
       <button class="secondary" onclick="exportCSV()">Export CSV</button>
       <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
+      <button id="resyncTagsBtn" class="danger" onclick="resyncTags()" style="display:none">Re-sync Tags</button>
     </div>
     <div class="filters-add">
       <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
@@ -173,6 +174,123 @@
       });
     }
 
+    var checkIsAdmin = TC.checkIsAdmin;
+
+    function fetchTagsForWorkItem(witClient, workItemId) {
+      return witClient.getWorkItem(workItemId, null, null, 4).then(function(wi) {
+        var tags = wi.fields['System.Tags'] || '';
+        var parentId = wi.fields['System.Parent'] || null;
+        var meta = {
+          workItemTitle: wi.fields['System.Title'],
+          tags: tags,
+          parentId: parentId,
+          parentTitle: null,
+          parentType: null,
+          epicId: null,
+          epicTitle: null
+        };
+        if (!parentId) return meta;
+        return witClient.getWorkItem(parentId, null, null, 4).then(function(parent) {
+          meta.parentTitle = parent.fields['System.Title'];
+          meta.parentType = parent.fields['System.WorkItemType'];
+          if (parent.fields['System.Tags']) {
+            meta.tags = TC.mergeTags(meta.tags, parent.fields['System.Tags']);
+          }
+          if (parent.fields['System.WorkItemType'] === 'Epic') {
+            meta.epicId = parentId;
+            meta.epicTitle = meta.parentTitle;
+            return meta;
+          }
+          var grandparentId = parent.fields['System.Parent'];
+          if (!grandparentId) return meta;
+          return witClient.getWorkItem(grandparentId, null, null, 4).then(function(gp) {
+            if (gp.fields['System.WorkItemType'] === 'Epic') {
+              meta.epicId = grandparentId;
+              meta.epicTitle = gp.fields['System.Title'];
+              if (gp.fields['System.Tags']) {
+                meta.tags = TC.mergeTags(meta.tags, gp.fields['System.Tags']);
+              }
+            }
+            return meta;
+          });
+        });
+      });
+    }
+
+    function batchUpdateEntries(entryUpdates) {
+      var byKey = {};
+      entryUpdates.forEach(function(u) {
+        var key = TC.getStorageKeyForDate(u.date);
+        if (!byKey[key]) byKey[key] = [];
+        byKey[key].push(u);
+      });
+      return Promise.all(Object.keys(byKey).map(function(key) {
+        var updates = byKey[key];
+        return window.dataService.getValue(key, { scopeType: 'Default' }).then(function(data) {
+          var monthEntries = data || [];
+          var updById = {};
+          updates.forEach(function(u) { updById[u.id] = u.updates; });
+          var updated = monthEntries.map(function(e) {
+            return updById[e.id] ? Object.assign({}, e, updById[e.id]) : e;
+          });
+          return window.dataService.setValue(key, updated, { scopeType: 'Default' });
+        });
+      }));
+    }
+
+    function resyncTags() {
+      if (filteredEntries.length === 0) {
+        alert('No entries in current filter to update.');
+        return;
+      }
+      if (!confirm('Re-sync tags for ' + filteredEntries.length + ' filtered entries from Azure DevOps?')) return;
+
+      var btn = document.getElementById('resyncTagsBtn');
+      btn.disabled = true;
+
+      // Deduplicate by workItemId — fetch each work item once
+      var byWorkItem = {};
+      filteredEntries.forEach(function(e) {
+        if (!byWorkItem[e.workItemId]) byWorkItem[e.workItemId] = [];
+        byWorkItem[e.workItemId].push(e);
+      });
+      var workItemIds = Object.keys(byWorkItem);
+      var total = workItemIds.length;
+      var done = 0;
+      var entryUpdates = [];
+
+      getWitClient().then(function(witClient) {
+        function processBatch(ids) {
+          if (ids.length === 0) return Promise.resolve();
+          var batch = ids.slice(0, 5);
+          var rest = ids.slice(5);
+          return Promise.all(batch.map(function(wiId) {
+            return fetchTagsForWorkItem(witClient, wiId).then(function(meta) {
+              byWorkItem[wiId].forEach(function(e) {
+                entryUpdates.push({ id: e.id, date: e.date, updates: meta });
+              });
+            }).catch(function() {}).then(function() {
+              done++;
+              btn.textContent = 'Re-syncing... ' + done + '/' + total;
+            });
+          })).then(function() { return processBatch(rest); });
+        }
+
+        btn.textContent = 'Re-syncing... 0/' + total;
+        return processBatch(workItemIds).then(function() {
+          return batchUpdateEntries(entryUpdates);
+        }).then(function() {
+          btn.disabled = false;
+          btn.textContent = 'Re-sync Tags';
+          return loadAllEntries();
+        });
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Re-sync Tags';
+        alert('Re-sync failed: ' + err.message);
+      });
+    }
+
     function openAddEntry() {
       var seen = {}, recent = [];
       // Build recent list from current user's entries, newest first.
@@ -276,6 +394,9 @@
               currentUser = ctx.user;
               collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
               currentProjectName = (ctx.project || {}).name || "";
+              checkIsAdmin().then(function(admin) {
+                if (admin) document.getElementById('resyncTagsBtn').style.display = '';
+              });
             } catch(e) {}
             try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
 
@@ -437,6 +558,7 @@
         opt.textContent = user.name;
         userSelect.appendChild(opt);
       });
+      userSelect.closest('.filter-group').style.display = users.length > 1 ? '' : 'none';
 
       // Unique epics
       var epics = [...new Set(allEntries.filter(e => e.epicId).map(e => JSON.stringify({id: e.epicId, title: e.epicTitle})))];
@@ -449,6 +571,7 @@
         opt.textContent = epic.title;
         epicSelect.appendChild(opt);
       });
+      epicSelect.closest('.filter-group').style.display = epics.length > 0 ? '' : 'none';
 
       // Unique projects
       var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))];
@@ -460,6 +583,7 @@
         opt.textContent = proj;
         projectSelect.appendChild(opt);
       });
+      projectSelect.closest('.filter-group').style.display = projects.some(function(p) { return p !== '(No Project)'; }) ? '' : 'none';
 
       // Unique clients
       var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))];
@@ -471,6 +595,7 @@
         opt.textContent = cli;
         clientSelect.appendChild(opt);
       });
+      clientSelect.closest('.filter-group').style.display = clients.some(function(c) { return c !== '(No Client)'; }) ? '' : 'none';
 
       // Unique tags
       var allTags = new Set();
@@ -490,6 +615,7 @@
         opt.textContent = tag;
         tagSelect.appendChild(opt);
       });
+      tagSelect.closest('.filter-group').style.display = allTags.size > 0 ? '' : 'none';
 
       // Restore selections after rebuild
       document.getElementById("userFilter").value    = savedUser;

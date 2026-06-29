@@ -327,6 +327,17 @@
       return defaultValue;
     }
 
+    function mergeTags(existing, additional) {
+      if (!additional) return existing;
+      if (!existing) return additional;
+      var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
+      additional.split(";").forEach(function(t) {
+        var trimmed = t.trim();
+        if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
+      });
+      return seen.join("; ");
+    }
+
     // Get all possible field names for API requests
     function getAllClientFieldRefs() {
       return CLIENT_FIELD_REFS.slice();
@@ -393,10 +404,8 @@
               entry.parentTitle = parentItem.fields["System.Title"];
               entry.parentType = parentItem.fields["System.WorkItemType"];
 
-              // Inherit tags from parent if task has no tags
-              if (!entry.tags && parentItem.fields["System.Tags"]) {
-                entry.tags = parentItem.fields["System.Tags"];
-                entry.tagsInheritedFrom = "parent";
+              if (parentItem.fields["System.Tags"]) {
+                entry.tags = mergeTags(entry.tags, parentItem.fields["System.Tags"]);
               }
 
               // Inherit project from parent if task has no project
@@ -450,10 +459,8 @@
                 entry.epicId = grandparentItem.id;
                 entry.epicTitle = grandparentItem.fields["System.Title"];
 
-                // Inherit tags from grandparent (Epic) if still no tags
-                if (!entry.tags && grandparentItem.fields["System.Tags"]) {
-                  entry.tags = grandparentItem.fields["System.Tags"];
-                  entry.tagsInheritedFrom = "epic";
+                if (grandparentItem.fields["System.Tags"]) {
+                  entry.tags = mergeTags(entry.tags, grandparentItem.fields["System.Tags"]);
                 }
 
                 // Inherit project from grandparent (Epic) if still no project

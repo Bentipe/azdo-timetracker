@@ -23,6 +23,64 @@
     return defaultValue;
   }
 
+  function checkIsAdmin() {
+    var ctx = VSS.getWebContext();
+    var base = ctx.collection.uri.replace(/\/$/, '');
+    var userId = ctx.user.id;
+    var projectName = ctx.project.name;
+    var headers = { 'Accept': 'application/json' };
+
+    function normalizeId(id) {
+      return String(id || '').toLowerCase().replace(/[{}]/g, '');
+    }
+
+    var groupUrl = base + '/_apis/Identities' +
+      '?searchFilter=General' +
+      '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
+      '&queryMembership=Expanded' +
+      '&api-version=5.1';
+
+    var userUrl = base + '/_apis/Identities' +
+      '?identityIds=' + encodeURIComponent(userId) +
+      '&api-version=5.1';
+
+    return Promise.all([
+      fetch(groupUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('Group lookup HTTP ' + r.status);
+        return r.json();
+      }),
+      fetch(userUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('User lookup HTTP ' + r.status);
+        return r.json();
+      })
+    ]).then(function(results) {
+      var groupData = results[0], userData = results[1];
+      if (!groupData || !groupData.value || !groupData.value.length) throw new Error('Group not found');
+      if (!userData  || !userData.value  || !userData.value.length)  throw new Error('User identity not found');
+
+      var members        = groupData.value[0].members || groupData.value[0].memberIds || [];
+      var userDescriptor = userData.value[0].descriptor || '';
+      var normUserId     = normalizeId(userId);
+
+      return members.some(function(m) {
+        var id = typeof m === 'string' ? m : ((m && m.id) || '');
+        return normalizeId(id) === normUserId ||
+               id.toLowerCase() === userDescriptor.toLowerCase();
+      });
+    }).catch(function() { return false; });
+  }
+
+  function mergeTags(existing, additional) {
+    if (!additional) return existing;
+    if (!existing) return additional;
+    var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
+    additional.split(";").forEach(function(t) {
+      var trimmed = t.trim();
+      if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
+    });
+    return seen.join("; ");
+  }
+
   // ---- Date helpers ------------------------------------------------
   // Entries store `date` as a local YYYY-MM-DD string (the value of an
   // <input type="date">). All comparisons are string-based to dodge the
@@ -221,9 +279,8 @@
           entry.parentTitle = parentItem.fields["System.Title"];
           entry.parentType = parentItem.fields["System.WorkItemType"];
 
-          if (!entry.tags && parentItem.fields["System.Tags"]) {
-            entry.tags = parentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "parent";
+          if (parentItem.fields["System.Tags"]) {
+            entry.tags = mergeTags(entry.tags, parentItem.fields["System.Tags"]);
           }
 
           var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
@@ -267,9 +324,8 @@
           entry.epicId = grandparentItem.id;
           entry.epicTitle = grandparentItem.fields["System.Title"];
 
-          if (!entry.tags && grandparentItem.fields["System.Tags"]) {
-            entry.tags = grandparentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "epic";
+          if (grandparentItem.fields["System.Tags"]) {
+            entry.tags = mergeTags(entry.tags, grandparentItem.fields["System.Tags"]);
           }
           var gpProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
           if (entry.project === "(No Project)" && gpProject) {
@@ -571,8 +627,10 @@
     getEntriesForMonth: getEntriesForMonth,
     loadEntriesForMonths: loadEntriesForMonths,
     loadEntriesForKeys: loadEntriesForKeys,
+    checkIsAdmin: checkIsAdmin,
     saveEntry: saveEntry,
     deleteEntryById: deleteEntryById,
+    mergeTags: mergeTags,
     EDIT_ICON: EDIT_ICON,
     DELETE_ICON: DELETE_ICON,
     escapeHtml: escapeHtml,

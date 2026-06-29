@@ -161,6 +161,16 @@ button.secondary:hover {
   background-color: var(--border);
 }
 
+button.danger {
+  background-color: #c0392b !important;
+  color: #ffffff !important;
+  border: none;
+}
+
+button.danger:hover {
+  background-color: #a93226 !important;
+}
+
 /* ================================================================
    Tables
    ================================================================ */
