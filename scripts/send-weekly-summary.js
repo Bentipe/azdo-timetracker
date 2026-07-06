@@ -39,6 +39,7 @@ const SMTP_HOST        = process.env.SMTP_HOST         || '';
 const SMTP_PORT        = parseInt(process.env.SMTP_PORT || '25', 10);
 const SMTP_FROM        = process.env.SMTP_FROM         || '';
 const SMTP_SECURE      = process.env.SMTP_SECURE === 'true';
+const SMTP_IGNORE_TLS  = process.env.SMTP_IGNORE_TLS === 'true';
 const SMTP_USER        = process.env.SMTP_USER         || null;
 const SMTP_PASS        = process.env.SMTP_PASS         || null;
 const DRY_RUN             = process.env.DRY_RUN === 'true';
@@ -342,6 +343,7 @@ async function main() {
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_SECURE,
+    ignoreTLS: SMTP_IGNORE_TLS,
     family: 4,
     connectionTimeout: 60000,
     greetingTimeout:   60000,

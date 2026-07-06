@@ -18,6 +18,7 @@
 #   SMTP_FROM          timetracker@yourcompany.com
 #   SMTP_PORT          25                               (optional)
 #   SMTP_SECURE        false                            (optional, true for TLS)
+#   SMTP_IGNORE_TLS    true                             (optional, skip STARTTLS — use when server cert is expired)
 #   SMTP_USER                                          (optional, for SMTP auth)
 #   SMTP_PASS                                          (optional)               [SECRET]
 #
@@ -83,6 +84,7 @@ jobs:
             const SMTP_PORT         = parseInt(process.env.SMTP_PORT || '25', 10);
             const SMTP_FROM         = process.env.SMTP_FROM         || '';
             const SMTP_SECURE       = process.env.SMTP_SECURE === 'true';
+            const SMTP_IGNORE_TLS   = process.env.SMTP_IGNORE_TLS === 'true';
             const SMTP_USER         = process.env.SMTP_USER         || null;
             const SMTP_PASS         = process.env.SMTP_PASS         || null;
             const DRY_RUN           = process.env.DRY_RUN === 'true';
@@ -259,6 +261,7 @@ jobs:
                 host: SMTP_HOST,
                 port: SMTP_PORT,
                 secure: SMTP_SECURE,
+                ignoreTLS: SMTP_IGNORE_TLS,
                 family: 4,
                 connectionTimeout: 60000,
                 greetingTimeout:   60000,
@@ -318,6 +321,7 @@ jobs:
           SMTP_PORT:              $(SMTP_PORT)
           SMTP_FROM:              $(SMTP_FROM)
           SMTP_SECURE:            $(SMTP_SECURE)
+          SMTP_IGNORE_TLS:        $(SMTP_IGNORE_TLS)
           SMTP_USER:              $(SMTP_USER)
           SMTP_PASS:              $(SMTP_PASS)
           OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
