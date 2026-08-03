@@ -42,7 +42,7 @@
       </div>
       
       <div class="form-group">
-        <label for="description">Description (optional, max 100 chars)</label>
+        <label for="description">Description (required, max 100 chars)</label>
         <textarea id="description" rows="2" maxlength="100" placeholder="What did you work on?"></textarea>
       </div>
       
@@ -293,26 +293,6 @@
       });
     }
 
-    // Save a new entry to the appropriate monthly partition
-    function saveEntry(entry) {
-      var storageKey = TC.getStorageKeyForDate(entry.date);
-      console.log("[TimeTracker] Saving entry to partition:", storageKey, "Entry:", entry);
-
-      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
-        var monthEntries = data || [];
-        console.log("[TimeTracker] Current entries in partition:", monthEntries.length);
-        monthEntries.push(entry);
-        console.log("[TimeTracker] After adding new entry:", monthEntries.length);
-        return window.dataService.setValue(storageKey, monthEntries, { scopeType: "Default" });
-      }).then(function(result) {
-        console.log("[TimeTracker] Save completed successfully");
-        return result;
-      }, function(err) {
-        console.error("[TimeTracker] Save failed:", err);
-        throw err;
-      });
-    }
-
     // Possible field reference names for Client (varies by where field was created in Azure DevOps)
     var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
     var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
@@ -349,7 +329,7 @@
     function saveTimeEntry() {
       var hours = parseFloat(document.getElementById("hours").value);
       var date = document.getElementById("date").value;
-      var description = document.getElementById("description").value;
+      var description = document.getElementById("description").value.trim();
 
       if (!hours || hours <= 0 || hours > 24) {
         showMessage("Please enter valid hours (0.25 - 24)", "error");
@@ -357,6 +337,10 @@
       }
       if (!date) {
         showMessage("Please select a date", "error");
+        return;
+      }
+      if (!description) {
+        showMessage("Please enter a description", "error");
         return;
       }
 
@@ -393,94 +377,34 @@
         function processWorkItem(workItem) {
           var entry = createEntry(workItem);
 
-          // If there's a parent, get its details (could be an Epic or Feature)
-          // Use expand=All (4) to get all fields including System.Parent
-          var parentPromise = entry.parentId
-            ? witClient.getWorkItem(entry.parentId, null, null, 4)
-            : Promise.resolve(null);
+          TC.resolveAncestry(witClient, workItem).then(function(anc) {
+            entry.parentTitle = anc.parentTitle;
+            entry.parentType = anc.parentType;
+            entry.epicId = anc.epicId;
+            entry.epicTitle = anc.epicTitle;
+            entry.ancestorIds = anc.ancestors.map(function(item) { return item.id; });
 
-          parentPromise.then(function(parentItem) {
-            if (parentItem) {
-              entry.parentTitle = parentItem.fields["System.Title"];
-              entry.parentType = parentItem.fields["System.WorkItemType"];
+            anc.ancestors.forEach(function(item) {
+              if (item.fields["System.Tags"]) {
+                entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
+              }
+              var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
 
-              if (parentItem.fields["System.Tags"]) {
-                entry.tags = mergeTags(entry.tags, parentItem.fields["System.Tags"]);
+              var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
+              if (entry.project === "(No Project)" && itemProject) {
+                entry.project = itemProject;
+                entry.projectInheritedFrom = inheritedFrom;
               }
 
-              // Inherit project from parent if task has no project
-              var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
-              if (entry.project === "(No Project)" && parentProject) {
-                entry.project = parentProject;
-                entry.projectInheritedFrom = "parent";
+              var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
+              if (entry.client === "(No Client)" && itemClient) {
+                entry.client = itemClient;
+                entry.clientInheritedFrom = inheritedFrom;
               }
-
-              // Inherit client from parent if task has no client
-              var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
-              if (entry.client === "(No Client)" && parentClient) {
-                entry.client = parentClient;
-                entry.clientInheritedFrom = "parent";
-              }
-
-              // If parent is an Epic, use it directly and inherit remaining properties
-              if (parentItem.fields["System.WorkItemType"] === "Epic") {
-                entry.epicId = entry.parentId;
-                entry.epicTitle = entry.parentTitle;
-
-                // Inherit project from Epic if still no project (reuse parentProject from above)
-                if (entry.project === "(No Project)" && parentProject) {
-                  entry.project = parentProject;
-                  entry.projectInheritedFrom = "epic";
-                }
-
-                // Inherit client from Epic if still no client (reuse parentClient from above)
-                if (entry.client === "(No Client)" && parentClient) {
-                  entry.client = parentClient;
-                  entry.clientInheritedFrom = "epic";
-                }
-
-                return { parentItem: parentItem, grandparentItem: null };
-              }
-
-              // If parent has a parent, try to get it (could be Epic)
-              if (parentItem.fields["System.Parent"]) {
-                return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4).then(function(grandparentItem) {
-                  return { parentItem: parentItem, grandparentItem: grandparentItem };
-                });
-              }
-            }
-            return { parentItem: parentItem, grandparentItem: null };
-          }).then(function(result) {
-            var parentItem = result ? result.parentItem : null;
-            var grandparentItem = result ? result.grandparentItem : null;
-
-            if (grandparentItem) {
-              if (grandparentItem.fields["System.WorkItemType"] === "Epic") {
-                entry.epicId = grandparentItem.id;
-                entry.epicTitle = grandparentItem.fields["System.Title"];
-
-                if (grandparentItem.fields["System.Tags"]) {
-                  entry.tags = mergeTags(entry.tags, grandparentItem.fields["System.Tags"]);
-                }
-
-                // Inherit project from grandparent (Epic) if still no project
-                var grandparentProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
-                if (entry.project === "(No Project)" && grandparentProject) {
-                  entry.project = grandparentProject;
-                  entry.projectInheritedFrom = "epic";
-                }
-
-                // Inherit client from grandparent (Epic) if still no client
-                var grandparentClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
-                if (entry.client === "(No Client)" && grandparentClient) {
-                  entry.client = grandparentClient;
-                  entry.clientInheritedFrom = "epic";
-                }
-              }
-            }
+            });
 
             // Save entry to monthly partition
-            saveEntry(entry).then(function() {
+            TC.saveEntry(window.dataService, entry, witClient).then(function() {
               showMessage("Time entry saved!", "success");
               document.getElementById("hours").value = "";
               document.getElementById("description").value = "";
@@ -566,7 +490,9 @@
           return;
         }
 
-        return TC.deleteEntryById(window.dataService, entryId, entry.date);
+        return getWitClient().then(function(client) {
+          return TC.deleteEntryById(window.dataService, entryId, entry.date, client);
+        });
       }).then(function() {
         showMessage("Entry deleted", "success");
         loadTimeEntries();

@@ -56,7 +56,7 @@
       <button class="secondary" onclick="clearFilters()">Clear</button>
       <button class="secondary" onclick="exportCSV()">Export CSV</button>
       <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
-      <button id="resyncTagsBtn" class="danger" onclick="resyncTags()" style="display:none">Re-sync Tags</button>
+      <button id="resyncBtn" class="danger" onclick="resyncAll()" style="display:none">Re-sync</button>
     </div>
     <div class="filters-add">
       <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
@@ -178,41 +178,27 @@
 
     function fetchTagsForWorkItem(witClient, workItemId) {
       return witClient.getWorkItem(workItemId, null, null, 4).then(function(wi) {
-        var tags = wi.fields['System.Tags'] || '';
-        var parentId = wi.fields['System.Parent'] || null;
         var meta = {
           workItemTitle: wi.fields['System.Title'],
-          tags: tags,
-          parentId: parentId,
+          tags: wi.fields['System.Tags'] || '',
+          parentId: wi.fields['System.Parent'] || null,
           parentTitle: null,
           parentType: null,
           epicId: null,
           epicTitle: null
         };
-        if (!parentId) return meta;
-        return witClient.getWorkItem(parentId, null, null, 4).then(function(parent) {
-          meta.parentTitle = parent.fields['System.Title'];
-          meta.parentType = parent.fields['System.WorkItemType'];
-          if (parent.fields['System.Tags']) {
-            meta.tags = TC.mergeTags(meta.tags, parent.fields['System.Tags']);
-          }
-          if (parent.fields['System.WorkItemType'] === 'Epic') {
-            meta.epicId = parentId;
-            meta.epicTitle = meta.parentTitle;
-            return meta;
-          }
-          var grandparentId = parent.fields['System.Parent'];
-          if (!grandparentId) return meta;
-          return witClient.getWorkItem(grandparentId, null, null, 4).then(function(gp) {
-            if (gp.fields['System.WorkItemType'] === 'Epic') {
-              meta.epicId = grandparentId;
-              meta.epicTitle = gp.fields['System.Title'];
-              if (gp.fields['System.Tags']) {
-                meta.tags = TC.mergeTags(meta.tags, gp.fields['System.Tags']);
-              }
+        return TC.resolveAncestry(witClient, wi).then(function(anc) {
+          meta.parentTitle = anc.parentTitle;
+          meta.parentType = anc.parentType;
+          meta.epicId = anc.epicId;
+          meta.epicTitle = anc.epicTitle;
+          meta.ancestorIds = anc.ancestors.map(function(item) { return item.id; });
+          anc.ancestors.forEach(function(item) {
+            if (item.fields['System.Tags']) {
+              meta.tags = TC.mergeTags(meta.tags, item.fields['System.Tags']);
             }
-            return meta;
           });
+          return meta;
         });
       });
     }
@@ -238,14 +224,14 @@
       }));
     }
 
-    function resyncTags() {
+    function resyncAll() {
       if (filteredEntries.length === 0) {
         alert('No entries in current filter to update.');
         return;
       }
-      if (!confirm('Re-sync tags for ' + filteredEntries.length + ' filtered entries from Azure DevOps?')) return;
+      if (!confirm('Re-sync tags, parent and epic for ' + filteredEntries.length + ' filtered entries from Azure DevOps?')) return;
 
-      var btn = document.getElementById('resyncTagsBtn');
+      var btn = document.getElementById('resyncBtn');
       btn.disabled = true;
 
       // Deduplicate by workItemId — fetch each work item once
@@ -258,6 +244,7 @@
       var total = workItemIds.length;
       var done = 0;
       var entryUpdates = [];
+      var metaByWorkItem = {};
 
       getWitClient().then(function(witClient) {
         function processBatch(ids) {
@@ -266,6 +253,7 @@
           var rest = ids.slice(5);
           return Promise.all(batch.map(function(wiId) {
             return fetchTagsForWorkItem(witClient, wiId).then(function(meta) {
+              metaByWorkItem[wiId] = meta;
               byWorkItem[wiId].forEach(function(e) {
                 entryUpdates.push({ id: e.id, date: e.date, updates: meta });
               });
@@ -280,13 +268,27 @@
         return processBatch(workItemIds).then(function() {
           return batchUpdateEntries(entryUpdates);
         }).then(function() {
+          // Recompute total-hours (if configured) for every work item this
+          // resync touched, using the freshly-resynced ancestor chains —
+          // this is the explicit "fix everything now" path for hours stuck
+          // on a work item after it was re-parented in Azure DevOps.
+          var touchedEntries = [];
+          workItemIds.forEach(function(wiId) {
+            var meta = metaByWorkItem[wiId];
+            if (!meta) return;
+            byWorkItem[wiId].forEach(function(e) {
+              touchedEntries.push(Object.assign({}, e, meta));
+            });
+          });
+          return TC.recalcTotalHours(window.dataService, witClient, touchedEntries);
+        }).then(function() {
           btn.disabled = false;
-          btn.textContent = 'Re-sync Tags';
+          btn.textContent = 'Re-sync';
           return loadAllEntries();
         });
       }).catch(function(err) {
         btn.disabled = false;
-        btn.textContent = 'Re-sync Tags';
+        btn.textContent = 'Re-sync';
         alert('Re-sync failed: ' + err.message);
       });
     }
@@ -395,7 +397,7 @@
               collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
               currentProjectName = (ctx.project || {}).name || "";
               checkIsAdmin().then(function(admin) {
-                if (admin) document.getElementById('resyncTagsBtn').style.display = '';
+                if (admin) document.getElementById('resyncBtn').style.display = '';
               });
             } catch(e) {}
             try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
@@ -1293,7 +1295,9 @@
       var entry = allEntries.find(function(e) { return e.id === entryId; });
       if (!entry) { alert("Entry not found"); return; }
       if (!currentUser || entry.userId !== currentUser.id) { alert("You can only delete your own entries"); return; }
-      TC.deleteEntryById(window.dataService, entryId, entry.date).then(function() {
+      getWitClient().then(function(client) {
+        return TC.deleteEntryById(window.dataService, entryId, entry.date, client);
+      }).then(function() {
         loadAllEntries();
       }, function() {
         alert("Failed to delete entry");

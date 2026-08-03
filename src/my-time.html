@@ -85,7 +85,7 @@
               <th>This Week</th>
               <th>In Range</th>
               <th>Last Logged</th>
-              <th>Quick Log</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="workBody"></tbody>
@@ -153,6 +153,7 @@
     var escapeHtml = TC.escapeHtml;
     var EDIT_ICON  = TC.EDIT_ICON;
     var DELETE_ICON = TC.DELETE_ICON;
+    var PLUS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
     var currentUser = null;
     var witClient = null;
     var collectionUri = "";
@@ -161,6 +162,7 @@
     var filteredEntries = [];   // allMyEntries within the selected From/To range
     var assignedItems = [];     // active work items assigned to @Me
     var closedEntryItemIds = {}; // { idString: true } — entry-only items whose CURRENT state is closed
+    var workRowsById = {};      // { idString: row } — last rendered "What You're Working On" rows, for quickAdd()
     var EXCLUDED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
 
     function initializeExtension() {
@@ -517,6 +519,7 @@
       });
 
       var rows = Object.keys(byItem).map(function(k){ return byItem[k]; });
+      workRowsById = byItem;
       // Order: assigned & untracked-this-week first, then most time this week, then most recent.
       rows.sort(function(a, b) {
         var au = (a.assigned && a.weekHours === 0) ? 1 : 0;
@@ -536,7 +539,6 @@
       empty.style.display = "none";
 
       var untracked = 0;
-      var todayVal = TC.todayISO();
       body.innerHTML = rows.map(function(r) {
         var isUntracked = r.assigned && r.weekHours === 0;
         if (isUntracked) untracked++;
@@ -557,12 +559,9 @@
           '<td>' + (r.weekHours ? '<strong>' + r.weekHours.toFixed(1) + 'h</strong>' : '<span class="muted">—</span>') + '</td>' +
           '<td>' + (r.recentHours ? r.recentHours.toFixed(1) + 'h' : '<span class="muted">—</span>') + '</td>' +
           '<td>' + (r.lastDate ? r.lastDate : '<span class="muted">—</span>') + '</td>' +
-          '<td><div class="quicklog">' +
-            '<input type="number" min="0.25" max="24" step="0.25" placeholder="h" id="ql-h-' + r.id + '" ' +
-              'onkeydown="return event.key !== \'e\' && event.key !== \'E\' && event.key !== \'+\' && event.key !== \'-\'">' +
-            '<input type="date" id="ql-d-' + r.id + '" value="' + todayVal + '">' +
-            '<button id="ql-b-' + r.id + '" onclick="quickLog(' + r.id + ')">Log</button>' +
-          '</div></td>' +
+          '<td class="actions-cell">' +
+            '<button class="icon-btn add-btn" title="Log time" onclick="quickAdd(' + r.id + ')">' + PLUS_ICON + '</button>' +
+          '</td>' +
         '</tr>';
       }).join("");
       return untracked;
@@ -600,28 +599,27 @@
       }).join("");
     }
 
-    function quickLog(workItemId) {
-      var hEl = document.getElementById("ql-h-" + workItemId);
-      var dEl = document.getElementById("ql-d-" + workItemId);
-      var bEl = document.getElementById("ql-b-" + workItemId);
-      var hours = parseFloat(hEl.value);
-      var date = dEl.value;
-
-      if (!hours || hours <= 0 || hours > 24) { showMessage("Enter valid hours (0.25 – 24)", "error"); return; }
-      if (!date) { showMessage("Pick a date", "error"); return; }
-
-      bEl.disabled = true;
-      getWitClient().then(function(client) {
-        return TC.buildEntryForWorkItem(client, workItemId, currentUser, { hours: hours, date: date, description: "" });
-      }).then(function(entry) {
-        return TC.saveEntry(window.dataService, entry);
-      }).then(function() {
-        showMessage("Logged " + hours + "h to #" + workItemId, "success");
-        return reloadAll();
-      }).catch(function(err) {
-        console.error("[MyTime] quickLog failed:", err);
-        showMessage("Error: " + (err && err.message ? err.message : "could not log time"), "error");
-        if (bEl) bEl.disabled = false;
+    function quickAdd(workItemId) {
+      var row = workRowsById[String(workItemId)];
+      var seen = {}, recent = [];
+      allMyEntries.slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      assignedItems.forEach(function(wi) {
+        var k = String(wi.id);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: wi.id, title: wi.title, type: wi.type }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: window.__projectName,
+        recentItems: recent.slice(0, 20),
+        initialItem: { id: workItemId, title: (row && row.title) || '(untitled)', type: (row && row.type) || null },
+        onSaved: function() { showMessage('Time logged!', 'success'); reloadAll(); }
       });
     }
 
@@ -666,7 +664,9 @@
 
     function deleteEntry(entryId, entryDate) {
       if (!confirm("Delete this time entry?")) return;
-      TC.deleteEntryById(window.dataService, entryId, entryDate).then(function() {
+      getWitClient().then(function(client) {
+        return TC.deleteEntryById(window.dataService, entryId, entryDate, client);
+      }).then(function() {
         showMessage("Entry deleted", "success");
         return reloadAll();
       }).catch(function(err) {

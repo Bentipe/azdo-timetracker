@@ -271,6 +271,7 @@ tr:hover td {
 .icon-btn:hover { background: var(--bg-row-hover) !important; }
 .edit-btn:hover  { color: var(--accent) !important; }
 .delete-btn:hover { color: #d13438 !important; }
+.add-btn:hover   { color: var(--accent) !important; }
 .actions-cell { white-space: nowrap; padding: 8px 12px !important; }
 
 /* ================================================================

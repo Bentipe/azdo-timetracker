@@ -57,6 +57,30 @@
       </p>
     </div>
 
+    <!-- Total logged hours field -->
+    <div class="card">
+      <h2>Total Logged Hours Field</h2>
+      <div class="schedule-group" style="max-width:420px">
+        <label for="totalHoursField">Work item field (reference name)</label>
+        <input type="text" id="totalHoursField" placeholder="e.g. Custom.TotalLoggedHours">
+      </div>
+      <p class="note">
+        When set, every time entry add, edit, or delete fully recomputes this field from
+        scratch on the logged work item — and cascades up to its parent and epic, however
+        many levels away, so an epic's field reflects its own hours plus every descendant's.
+        It's always an absolute recalculation (never an incremental add), so it self-heals
+        after concurrent edits and after a work item is re-parented to a different epic.
+        Leave blank to disable. The field must already exist on the relevant work item types.<br><br>
+        <strong>After setting this for the first time</strong>, go to Time Reports, widen the
+        date filter to cover your full history, and click <strong>Re-sync</strong> once — that
+        backfills every past month into the recalculation and brings existing totals up to date.
+      </p>
+      <div class="btn-row">
+        <button id="totalHoursSaveBtn" onclick="saveTotalHoursField()">Save</button>
+        <span id="totalHoursStatus" class="status"></span>
+      </div>
+    </div>
+
     <!-- Users -->
     <div class="card" id="usersCard">
       <h2>User Notification Configuration</h2>
@@ -166,6 +190,7 @@
             }
             document.getElementById('mainContent').style.display = 'flex';
             loadData();
+            loadTotalHoursField();
           });
         }, function(err) {
           console.error('[NotifSettings] Failed to get ExtensionData:', err);
@@ -372,6 +397,40 @@
           status.textContent = 'Error: ' + (err.message || String(err));
           btn.disabled = false;
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Total logged hours field
+    // -------------------------------------------------------------------------
+
+    function loadTotalHoursField() {
+      window.TimeCore.getSettings(window.dataService).then(function(settings) {
+        document.getElementById('totalHoursField').value = settings.totalHoursField || '';
+      });
+    }
+
+    function saveTotalHoursField() {
+      var btn    = document.getElementById('totalHoursSaveBtn');
+      var status = document.getElementById('totalHoursStatus');
+      var value  = document.getElementById('totalHoursField').value.trim();
+      btn.disabled = true;
+      status.className = 'status';
+      status.textContent = 'Saving…';
+
+      window.dataService.getValue(window.TimeCore.SETTINGS_KEY, { scopeType: 'Default' }).then(function(current) {
+        var merged = Object.assign({}, current || {}, { totalHoursField: value });
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, merged, { scopeType: 'Default' });
+      }, function() {
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, { totalHoursField: value }, { scopeType: 'Default' });
+      }).then(function() {
+        status.className = 'status success';
+        status.textContent = 'Saved successfully.';
+        btn.disabled = false;
+      }, function(err) {
+        status.className = 'status error';
+        status.textContent = 'Error: ' + (err.message || String(err));
+        btn.disabled = false;
+      });
     }
 
     var addUserSearchTimer = null;

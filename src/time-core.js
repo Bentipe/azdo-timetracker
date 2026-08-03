@@ -189,23 +189,141 @@
     });
   }
 
-  function saveEntry(dataService, entry) {
+  function saveEntry(dataService, entry, witClient) {
     var key = getStorageKeyForDate(entry.date);
     return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
       var monthEntries = data || [];
       monthEntries.push(entry);
-      return dataService.setValue(key, monthEntries, { scopeType: "Default" });
+      return dataService.setValue(key, monthEntries, { scopeType: "Default" }).then(function (result) {
+        return recalcTotalHours(dataService, witClient, [entry]).then(function () { return result; });
+      });
     });
   }
 
-  function deleteEntryById(dataService, entryId, entryDate) {
+  function deleteEntryById(dataService, entryId, entryDate, witClient) {
     var key = getStorageKeyForDate(entryDate);
     return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
       if (!data || data.length === 0) {
         throw new Error("No entries found for this month — aborting delete to prevent data loss");
       }
+      var removed = data.find(function (e) { return e.id === entryId; });
       var filtered = data.filter(function (e) { return e.id !== entryId; });
-      return dataService.setValue(key, filtered, { scopeType: "Default" });
+      return dataService.setValue(key, filtered, { scopeType: "Default" }).then(function (result) {
+        return recalcTotalHours(dataService, witClient, [removed]).then(function () { return result; });
+      });
+    });
+  }
+
+  // ---- Total-hours field propagation --------------------------------
+  // Admins can configure a work item field (Settings page) that should
+  // hold the sum of every hour logged on that item AND cascading up
+  // through its ancestor chain — so a Feature/Epic's field reflects its
+  // own direct hours plus every descendant's, no matter how deep.
+  //
+  // Every add/edit/delete triggers a FULL recomputation from the source
+  // entries — never an incremental delta. A running delta has two fatal
+  // flaws: it's a read-modify-write race under concurrent edits, and it
+  // never self-corrects when a work item is re-parented to a different
+  // epic in Azure DevOps (the hours stay stuck on the old epic forever).
+  // A full recompute has neither problem — it always writes an absolute,
+  // freshly-derived total, and any subsequent touch anywhere in the
+  // hierarchy re-derives it from scratch. Best-effort throughout: a
+  // failed field write never blocks the entry save/edit/delete itself.
+
+  var SETTINGS_KEY = "timetracker_settings";
+  // Guaranteed recompute coverage, regardless of the knownMonthKeys registry
+  // below — keeps a fresh install correct without needing a backfill first.
+  var TOTAL_HOURS_LOOKBACK_MONTHS = 60;
+
+  function getSettings(dataService) {
+    return dataService.getValue(SETTINGS_KEY, { scopeType: "Default" }).then(function (cfg) {
+      return cfg || {};
+    }, function () {
+      return {};
+    });
+  }
+
+  // The work item itself plus every ancestor recorded on the entry
+  // (nearest first, epic last if one was found).
+  function chainIdsFor(entry) {
+    var ids = [entry.workItemId];
+    (entry.ancestorIds || []).forEach(function (id) {
+      if (ids.indexOf(id) === -1) ids.push(id);
+    });
+    return ids;
+  }
+
+  // Re-resolves a work item's CURRENT ancestor chain (live from Azure
+  // DevOps) and folds it onto a copy of the entry. Called on every edit
+  // so a re-parented Feature/Epic self-heals the next time any of its
+  // entries are touched, instead of staying stuck on stale data forever.
+  // Falls back to the entry's existing chain if the work item can't be read.
+  function refreshEntryAncestry(witClient, entry) {
+    return witClient.getWorkItem(entry.workItemId, null, null, 4).then(function (workItem) {
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        return Object.assign({}, entry, {
+          parentId: anc.parentId,
+          parentTitle: anc.parentTitle,
+          parentType: anc.parentType,
+          epicId: anc.epicId,
+          epicTitle: anc.epicTitle,
+          ancestorIds: anc.ancestors.map(function (a) { return a.id; })
+        });
+      });
+    }).catch(function () { return entry; });
+  }
+
+  // touchedEntries: entry snapshots (old and/or new state; nulls allowed)
+  // whose ancestor chains define which work items need recomputing.
+  function recalcTotalHours(dataService, witClient, touchedEntries) {
+    if (!witClient) return Promise.resolve();
+    return getSettings(dataService).then(function (settings) {
+      var fieldRef = settings.totalHoursField;
+      if (!fieldRef) return;
+
+      var idSet = {};
+      var known = (settings.knownMonthKeys || []).slice();
+      var knownSet = {};
+      known.forEach(function (k) { knownSet[k] = true; });
+      var registryChanged = false;
+
+      (touchedEntries || []).filter(Boolean).forEach(function (e) {
+        chainIdsFor(e).forEach(function (id) { idSet[id] = true; });
+        if (e.date) {
+          var mk = getStorageKeyForDate(e.date);
+          if (!knownSet[mk]) { knownSet[mk] = true; known.push(mk); registryChanged = true; }
+        }
+      });
+
+      var ids = Object.keys(idSet);
+      if (!ids.length) return;
+
+      var registerPromise = registryChanged
+        ? dataService.setValue(SETTINGS_KEY, Object.assign({}, settings, { knownMonthKeys: known }), { scopeType: "Default" })
+        : Promise.resolve();
+
+      return registerPromise.then(function () {
+        var fixedKeys = monthKeysBetween(
+          new Date(new Date().getFullYear(), new Date().getMonth() - TOTAL_HOURS_LOOKBACK_MONTHS, 1),
+          new Date()
+        );
+        var keySet = {};
+        fixedKeys.forEach(function (k) { keySet[k] = true; });
+        known.forEach(function (k) { keySet[k] = true; });
+        return loadEntriesForKeys(dataService, Object.keys(keySet));
+      }).then(function (allEntries) {
+        return Promise.all(ids.map(function (idStr) {
+          var id = parseInt(idStr, 10);
+          var total = 0;
+          allEntries.forEach(function (e) {
+            if (chainIdsFor(e).indexOf(id) !== -1) total += (e.hours || 0);
+          });
+          return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
+            .catch(function (err) {
+              console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
+            });
+        }));
+      });
     });
   }
 
@@ -219,16 +337,33 @@
     return div.innerHTML;
   }
 
-  function updateEntry(dataService, entryId, originalDate, updates) {
+  // Re-resolves ancestry before applying `updates`, but only when the
+  // total-hours field is actually configured (otherwise this would cost
+  // an extra Azure DevOps round trip on every plain hours/date edit for
+  // installs that don't use the feature at all).
+  function maybeRefreshAncestry(dataService, witClient, entry) {
+    if (!witClient || !entry) return Promise.resolve(entry);
+    return getSettings(dataService).then(function (settings) {
+      return settings.totalHoursField ? refreshEntryAncestry(witClient, entry) : entry;
+    });
+  }
+
+  function updateEntry(dataService, entryId, originalDate, updates, witClient) {
     var originalKey = getStorageKeyForDate(originalDate);
     var newKey = getStorageKeyForDate(updates.date);
     if (originalKey === newKey) {
       return dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
-        var updated = (data || []).map(function(e) {
-          if (e.id !== entryId) return e;
-          return Object.assign({}, e, updates);
+        var oldEntry = (data || []).find(function(e) { return e.id === entryId; });
+        if (!oldEntry) throw new Error("Entry not found");
+        return maybeRefreshAncestry(dataService, witClient, oldEntry).then(function (refreshed) {
+          var newEntry = Object.assign({}, refreshed, updates);
+          var updated = data.map(function(e) {
+            return e.id === entryId ? newEntry : e;
+          });
+          return dataService.setValue(originalKey, updated, { scopeType: "Default" }).then(function (result) {
+            return recalcTotalHours(dataService, witClient, [oldEntry, newEntry]).then(function () { return result; });
+          });
         });
-        return dataService.setValue(originalKey, updated, { scopeType: "Default" });
       });
     }
     return Promise.all([
@@ -239,10 +374,69 @@
       var newEntries = results[1] || [];
       var entryToMove = oldEntries.find(function(e) { return e.id === entryId; });
       if (!entryToMove) throw new Error("Entry not found in original month");
-      var updatedEntry = Object.assign({}, entryToMove, updates);
-      return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
-        return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" });
+      return maybeRefreshAncestry(dataService, witClient, entryToMove).then(function (refreshed) {
+        var updatedEntry = Object.assign({}, refreshed, updates);
+        return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
+          return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" }).then(function (result) {
+            return recalcTotalHours(dataService, witClient, [entryToMove, updatedEntry]).then(function () { return result; });
+          });
+        });
       });
+    });
+  }
+
+  // ---- Ancestry resolution (parent + epic, arbitrary depth) --------
+  // Climbs System.Parent links until it finds a work item of type
+  // "Epic" (or runs out of ancestors / hits the depth guard). Used by
+  // both new-entry creation and the report's "Re-sync" action so the
+  // two stay consistent.
+  //
+  // Returns { parentId, parentTitle, parentType, epicId, epicTitle, ancestors }
+  // `ancestors` is the climbed chain (nearest first, epic last if found)
+  // so callers can inherit tags/project/client from every level, however
+  // deep, instead of stopping after the parent and grandparent.
+  var MAX_ANCESTOR_DEPTH = 25;
+
+  function resolveAncestry(witClient, workItem) {
+    var isEpic = workItem.fields["System.WorkItemType"] === "Epic";
+    var immediateParentId = workItem.fields["System.Parent"] || null;
+    var result = { parentId: immediateParentId, parentTitle: null, parentType: null, epicId: null, epicTitle: null, ancestors: [] };
+
+    if (!immediateParentId) return Promise.resolve(result);
+
+    var visited = {};
+    visited[workItem.id] = true;
+
+    return witClient.getWorkItem(immediateParentId, null, null, 4).then(function (parentItem) {
+      result.parentTitle = parentItem.fields["System.Title"];
+      result.parentType = parentItem.fields["System.WorkItemType"];
+      result.ancestors.push(parentItem);
+      visited[parentItem.id] = true;
+
+      // An epic's own epic-ness isn't meaningful — don't hunt further up.
+      if (isEpic) return result;
+
+      if (parentItem.fields["System.WorkItemType"] === "Epic") {
+        result.epicId = parentItem.id;
+        result.epicTitle = parentItem.fields["System.Title"];
+        return result;
+      }
+
+      function climb(id, depth) {
+        if (!id || visited[id] || depth > MAX_ANCESTOR_DEPTH) return Promise.resolve();
+        visited[id] = true;
+        return witClient.getWorkItem(id, null, null, 4).then(function (ancestor) {
+          result.ancestors.push(ancestor);
+          if (ancestor.fields["System.WorkItemType"] === "Epic") {
+            result.epicId = ancestor.id;
+            result.epicTitle = ancestor.fields["System.Title"];
+            return;
+          }
+          return climb(ancestor.fields["System.Parent"], depth + 1);
+        });
+      }
+
+      return climb(parentItem.fields["System.Parent"], 1).then(function () { return result; });
     });
   }
 
@@ -270,74 +464,32 @@
         createdAt: new Date().toISOString()
       };
 
-      var parentPromise = entry.parentId
-        ? witClient.getWorkItem(entry.parentId, null, null, 4)
-        : Promise.resolve(null);
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        entry.parentTitle = anc.parentTitle;
+        entry.parentType = anc.parentType;
+        entry.epicId = anc.epicId;
+        entry.epicTitle = anc.epicTitle;
+        entry.ancestorIds = anc.ancestors.map(function (item) { return item.id; });
 
-      return parentPromise.then(function (parentItem) {
-        if (parentItem) {
-          entry.parentTitle = parentItem.fields["System.Title"];
-          entry.parentType = parentItem.fields["System.WorkItemType"];
+        anc.ancestors.forEach(function (item) {
+          if (item.fields["System.Tags"]) {
+            entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
+          }
+          var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
 
-          if (parentItem.fields["System.Tags"]) {
-            entry.tags = mergeTags(entry.tags, parentItem.fields["System.Tags"]);
+          var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
+          if (entry.project === "(No Project)" && itemProject) {
+            entry.project = itemProject;
+            entry.projectInheritedFrom = inheritedFrom;
           }
 
-          var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && parentProject) {
-            entry.project = parentProject;
-            entry.projectInheritedFrom = "parent";
+          var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
+          if (entry.client === "(No Client)" && itemClient) {
+            entry.client = itemClient;
+            entry.clientInheritedFrom = inheritedFrom;
           }
+        });
 
-          var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && parentClient) {
-            entry.client = parentClient;
-            entry.clientInheritedFrom = "parent";
-          }
-
-          if (parentItem.fields["System.WorkItemType"] === "Epic") {
-            entry.epicId = entry.parentId;
-            entry.epicTitle = entry.parentTitle;
-            if (entry.project === "(No Project)" && parentProject) {
-              entry.project = parentProject;
-              entry.projectInheritedFrom = "epic";
-            }
-            if (entry.client === "(No Client)" && parentClient) {
-              entry.client = parentClient;
-              entry.clientInheritedFrom = "epic";
-            }
-            return { parentItem: parentItem, grandparentItem: null };
-          }
-
-          if (parentItem.fields["System.Parent"]) {
-            return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4)
-              .then(function (grandparentItem) {
-                return { parentItem: parentItem, grandparentItem: grandparentItem };
-              });
-          }
-        }
-        return { parentItem: parentItem, grandparentItem: null };
-      }).then(function (result) {
-        var grandparentItem = result ? result.grandparentItem : null;
-
-        if (grandparentItem && grandparentItem.fields["System.WorkItemType"] === "Epic") {
-          entry.epicId = grandparentItem.id;
-          entry.epicTitle = grandparentItem.fields["System.Title"];
-
-          if (grandparentItem.fields["System.Tags"]) {
-            entry.tags = mergeTags(entry.tags, grandparentItem.fields["System.Tags"]);
-          }
-          var gpProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && gpProject) {
-            entry.project = gpProject;
-            entry.projectInheritedFrom = "epic";
-          }
-          var gpClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && gpClient) {
-            entry.client = gpClient;
-            entry.clientInheritedFrom = "epic";
-          }
-        }
         return entry;
       });
     });
@@ -410,7 +562,7 @@
         '</div>' +
         '<div class="filter-group">' +
           '<label for="tcDesc">Description' +
-            ' <span style="font-weight:400;color:var(--text-secondary)">(optional, max 100 chars)</span></label>' +
+            ' <span style="font-weight:400;color:var(--text-secondary)">(required, max 100 chars)</span></label>' +
           '<textarea id="tcDesc" rows="2" maxlength="100"' +
             ' style="resize:vertical;width:100%;box-sizing:border-box;"></textarea>' +
         '</div>' +
@@ -554,6 +706,7 @@
       if (!selectedItem)                      { showErr('Select a work item first'); return; }
       if (!hours || hours <= 0 || hours > 24) { showErr('Enter valid hours (0.25–24)'); return; }
       if (!date)                              { showErr('Pick a date'); return; }
+      if (!desc)                              { showErr('Enter a description'); return; }
 
       var saveBtn = document.getElementById('tcSaveBtn');
       saveBtn.disabled = true;
@@ -562,22 +715,24 @@
       var sameItem = config.entryId && config.initialItem && selectedItem.id === config.initialItem.id;
       var p;
       if (config.entryId && sameItem) {
-        p = updateEntry(config.dataService, config.entryId, config.originalDate,
-          { hours: hours, date: date, description: desc });
+        p = config.witClientGetter().then(function(c) {
+          return updateEntry(config.dataService, config.entryId, config.originalDate,
+            { hours: hours, date: date, description: desc }, c);
+        });
       } else if (config.entryId) {
         p = config.witClientGetter().then(function(c) {
           return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
-            { hours: hours, date: date, description: desc });
-        }).then(function(newEntry) {
-          return deleteEntryById(config.dataService, config.entryId, config.originalDate)
-            .then(function() { return saveEntry(config.dataService, newEntry); });
+            { hours: hours, date: date, description: desc }).then(function(newEntry) {
+            return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
+              .then(function() { return saveEntry(config.dataService, newEntry, c); });
+          });
         });
       } else {
         p = config.witClientGetter().then(function(c) {
           return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
-            { hours: hours, date: date, description: desc });
-        }).then(function(entry) {
-          return saveEntry(config.dataService, entry);
+            { hours: hours, date: date, description: desc }).then(function(entry) {
+            return saveEntry(config.dataService, entry, c);
+          });
         });
       }
       p.then(function() {
@@ -630,11 +785,15 @@
     checkIsAdmin: checkIsAdmin,
     saveEntry: saveEntry,
     deleteEntryById: deleteEntryById,
+    SETTINGS_KEY: SETTINGS_KEY,
+    getSettings: getSettings,
+    recalcTotalHours: recalcTotalHours,
     mergeTags: mergeTags,
     EDIT_ICON: EDIT_ICON,
     DELETE_ICON: DELETE_ICON,
     escapeHtml: escapeHtml,
     updateEntry: updateEntry,
+    resolveAncestry: resolveAncestry,
     buildEntryForWorkItem: buildEntryForWorkItem,
     openAddEntryModal: openAddEntryModal
   };
