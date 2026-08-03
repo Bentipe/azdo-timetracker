@@ -400,7 +400,16 @@
   function resolveAncestry(witClient, workItem) {
     var isEpic = workItem.fields["System.WorkItemType"] === "Epic";
     var immediateParentId = workItem.fields["System.Parent"] || null;
-    var result = { parentId: immediateParentId, parentTitle: null, parentType: null, epicId: null, epicTitle: null, ancestors: [] };
+    var result = {
+      parentId: immediateParentId,
+      parentTitle: null,
+      parentType: null,
+      // An epic is its own epic — this is what lets entries logged
+      // directly on an epic still show up under the Epic filter/grouping.
+      epicId: isEpic ? workItem.id : null,
+      epicTitle: isEpic ? workItem.fields["System.Title"] : null,
+      ancestors: []
+    };
 
     if (!immediateParentId) return Promise.resolve(result);
 
@@ -413,7 +422,7 @@
       result.ancestors.push(parentItem);
       visited[parentItem.id] = true;
 
-      // An epic's own epic-ness isn't meaningful — don't hunt further up.
+      // We already know our own epic-ness; no need to hunt further up.
       if (isEpic) return result;
 
       if (parentItem.fields["System.WorkItemType"] === "Epic") {

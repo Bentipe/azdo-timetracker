@@ -61,8 +61,10 @@
     <div class="card">
       <h2>Total Logged Hours Field</h2>
       <div class="schedule-group" style="max-width:420px">
-        <label for="totalHoursField">Work item field (reference name)</label>
-        <input type="text" id="totalHoursField" placeholder="e.g. Custom.TotalLoggedHours">
+        <label for="totalHoursField">Work item field</label>
+        <select id="totalHoursField">
+          <option value="">(disabled — no field)</option>
+        </select>
       </div>
       <p class="note">
         When set, every time entry add, edit, or delete fully recomputes this field from
@@ -165,6 +167,17 @@
     var savedConfig = {}; // userId -> { emailEnabled, cc }
     var collectionBase = '';
     var collectionProject = '';
+    var witClientCache = null;
+
+    function getWitClient() {
+      if (witClientCache) return Promise.resolve(witClientCache);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          witClientCache = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(witClientCache);
+        });
+      });
+    }
 
     // -------------------------------------------------------------------------
     // VSS init
@@ -190,7 +203,7 @@
             }
             document.getElementById('mainContent').style.display = 'flex';
             loadData();
-            loadTotalHoursField();
+            initTotalHoursField();
           });
         }, function(err) {
           console.error('[NotifSettings] Failed to get ExtensionData:', err);
@@ -403,9 +416,103 @@
     // Total logged hours field
     // -------------------------------------------------------------------------
 
-    function loadTotalHoursField() {
-      window.TimeCore.getSettings(window.dataService).then(function(settings) {
-        document.getElementById('totalHoursField').value = settings.totalHoursField || '';
+    // The classic TFS/WorkItemTracking/RestClient SDK returns a field's
+    // `type` as this numeric enum (not the string name the raw REST JSON
+    // uses, e.g. "integer") — confirmed live: "Hours spend" comes back as
+    // type 1, matching Integer here.
+    var FIELD_TYPE = {
+      STRING: 0, INTEGER: 1, DATE_TIME: 2, PLAIN_TEXT: 3, HTML: 4,
+      TREE_PATH: 5, HISTORY: 6, DOUBLE: 7, GUID: 8, BOOLEAN: 9,
+      IDENTITY: 10, PICKLIST_STRING: 11, PICKLIST_INTEGER: 12, PICKLIST_DOUBLE: 13
+    };
+    var FIELD_TYPE_LABELS = {};
+    FIELD_TYPE_LABELS[FIELD_TYPE.STRING] = 'Text';
+    FIELD_TYPE_LABELS[FIELD_TYPE.INTEGER] = 'Integer';
+    FIELD_TYPE_LABELS[FIELD_TYPE.DATE_TIME] = 'DateTime';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PLAIN_TEXT] = 'PlainText';
+    FIELD_TYPE_LABELS[FIELD_TYPE.HTML] = 'Html';
+    FIELD_TYPE_LABELS[FIELD_TYPE.TREE_PATH] = 'TreePath';
+    FIELD_TYPE_LABELS[FIELD_TYPE.HISTORY] = 'History';
+    FIELD_TYPE_LABELS[FIELD_TYPE.DOUBLE] = 'Double';
+    FIELD_TYPE_LABELS[FIELD_TYPE.GUID] = 'Guid';
+    FIELD_TYPE_LABELS[FIELD_TYPE.BOOLEAN] = 'Boolean';
+    FIELD_TYPE_LABELS[FIELD_TYPE.IDENTITY] = 'Identity';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_STRING] = 'PicklistString';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_INTEGER] = 'PicklistInteger';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_DOUBLE] = 'PicklistDouble';
+
+    function fieldTypeLabel(type) {
+      return FIELD_TYPE_LABELS[type] || ('type ' + type);
+    }
+
+    // Fields that make sense as an hours total. Integer/Double are the "real"
+    // numeric types; Text/PlainText are included too because Azure DevOps
+    // happily stores a written number in a text field (many custom fields
+    // default to Text unless someone explicitly changes it) — it just loses
+    // native numeric sort/rollup, which is a tradeoff, not a hard blocker.
+    var TOTAL_HOURS_FIELD_TYPES = {};
+    [FIELD_TYPE.INTEGER, FIELD_TYPE.DOUBLE, FIELD_TYPE.STRING, FIELD_TYPE.PLAIN_TEXT].forEach(function(t) {
+      TOTAL_HOURS_FIELD_TYPES[t] = true;
+    });
+
+    // The REST client is expected to return a plain array, but normalize
+    // defensively in case this SDK/server combination hands back the raw
+    // {count, value} envelope instead of unwrapping it.
+    function normalizeFieldsResult(res) {
+      if (Array.isArray(res)) return res;
+      if (res && Array.isArray(res.value)) return res.value;
+      return [];
+    }
+
+    function initTotalHoursField() {
+      var select = document.getElementById('totalHoursField');
+      Promise.all([
+        getWitClient().then(function(c) { return c.getFields(); }).then(normalizeFieldsResult, function(err) {
+          console.warn('[Settings] getFields() failed:', err);
+          return [];
+        }),
+        window.TimeCore.getSettings(window.dataService)
+      ]).then(function(results) {
+        var fields = results[0] || [];
+        var currentValue = (results[1] || {}).totalHoursField || '';
+        console.log('[Settings] getFields() returned', fields.length, 'fields; looking for', currentValue,
+          '; match:', fields.find(function(f) { return f.referenceName === currentValue; }));
+
+        var candidates = fields.filter(function(f) {
+          return TOTAL_HOURS_FIELD_TYPES[f.type];
+        }).sort(function(a, b) {
+          return (a.name || '').localeCompare(b.name || '');
+        });
+        console.log('[Settings]', candidates.length, 'candidates after type filter');
+
+        var html = '<option value="">(disabled — no field)</option>';
+        var found = !currentValue;
+        candidates.forEach(function(f) {
+          var isSelected = f.referenceName === currentValue;
+          if (isSelected) found = true;
+          html += '<option value="' + escHtml(f.referenceName) + '"' + (isSelected ? ' selected' : '') + '>' +
+            escHtml(f.name) + ' (' + escHtml(fieldTypeLabel(f.type)) + ') — ' + escHtml(f.referenceName) + '</option>';
+        });
+        // Keep an existing saved value selectable even if it didn't come back
+        // in this field list (e.g. the fields call failed, or it's a type we
+        // don't normally offer) — never silently drop a working configuration.
+        if (currentValue && !found) {
+          html += '<option value="' + escHtml(currentValue) + '" selected>' +
+            escHtml(currentValue) + ' (not found in field list)</option>';
+        }
+        select.innerHTML = html;
+      }).catch(function(err) {
+        console.error('[Settings] initTotalHoursField failed:', err);
+        select.innerHTML = '<option value="">(could not load fields — see console)</option>';
+      });
+    }
+
+    function persistTotalHoursField(value) {
+      return window.dataService.getValue(window.TimeCore.SETTINGS_KEY, { scopeType: 'Default' }).then(function(current) {
+        var merged = Object.assign({}, current || {}, { totalHoursField: value });
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, merged, { scopeType: 'Default' });
+      }, function() {
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, { totalHoursField: value }, { scopeType: 'Default' });
       });
     }
 
@@ -415,21 +522,39 @@
       var value  = document.getElementById('totalHoursField').value.trim();
       btn.disabled = true;
       status.className = 'status';
-      status.textContent = 'Saving…';
 
-      window.dataService.getValue(window.TimeCore.SETTINGS_KEY, { scopeType: 'Default' }).then(function(current) {
-        var merged = Object.assign({}, current || {}, { totalHoursField: value });
-        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, merged, { scopeType: 'Default' });
-      }, function() {
-        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, { totalHoursField: value }, { scopeType: 'Default' });
-      }).then(function() {
-        status.className = 'status success';
-        status.textContent = 'Saved successfully.';
-        btn.disabled = false;
-      }, function(err) {
+      function finishError(msg) {
         status.className = 'status error';
-        status.textContent = 'Error: ' + (err.message || String(err));
+        status.textContent = msg;
         btn.disabled = false;
+      }
+
+      if (!value) {
+        status.textContent = 'Saving…';
+        persistTotalHoursField(value).then(function() {
+          status.className = 'status success';
+          status.textContent = 'Saved — total-hours tracking disabled.';
+          btn.disabled = false;
+        }, function(err) {
+          finishError('Error: ' + (err.message || String(err)));
+        });
+        return;
+      }
+
+      status.textContent = 'Checking field exists…';
+      getWitClient().then(function(witClient) {
+        return witClient.getField(value);
+      }).then(function(field) {
+        status.textContent = 'Saving…';
+        return persistTotalHoursField(value).then(function() {
+          status.className = 'status success';
+          status.textContent = 'Saved — field found: "' + (field.name || value) + '" (' + fieldTypeLabel(field.type) + ').';
+          btn.disabled = false;
+        }, function(err) {
+          finishError('Error: ' + (err.message || String(err)));
+        });
+      }, function() {
+        finishError('Field "' + value + '" was not found in this organization — check the reference name (Process admin, or GET .../_apis/wit/fields).');
       });
     }
 

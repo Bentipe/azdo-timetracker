@@ -737,9 +737,9 @@
           '<span class="tag">' + escapeHtml(t) + '</span>'
         ).join("") : "-";
 
-        // Show parent (User Story, Feature, etc.) if available and not an Epic
+        // Show the immediate parent, whatever its type (including Epic)
         var parentDisplay = "-";
-        if (e.parentTitle && e.parentType && e.parentType !== "Epic") {
+        if (e.parentTitle && e.parentType) {
           parentDisplay = escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>";
         }
 
