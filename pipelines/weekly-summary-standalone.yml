@@ -1,4 +1,4 @@
-# Weekly Hour Summary Emails — standalone version
+﻿# Weekly Hour Summary Emails — standalone version
 #
 # Use this file if the extension repository is NOT hosted in the same Azure
 # DevOps instance where you want to run the pipeline.
@@ -18,6 +18,7 @@
 #   SMTP_FROM          timetracker@yourcompany.com
 #   SMTP_PORT          25                               (optional)
 #   SMTP_SECURE        false                            (optional, true for TLS)
+#   SMTP_IGNORE_TLS    true                             (optional, skip STARTTLS — use when server cert is expired)
 #   SMTP_USER                                          (optional, for SMTP auth)
 #   SMTP_PASS                                          (optional)               [SECRET]
 #
@@ -46,252 +47,282 @@ schedules:
 
 trigger: none
 
-pool:
-  name: Default   # your self-hosted agent pool
+jobs:
+  - job: SendWeeklySummary
+    timeoutInMinutes: 70
+    pool:
+      name: Default
+      demands:
+        - Agent.OS -equals Windows_NT
+    steps:
+      - task: NodeTool@0
+        displayName: Use Node.js 16
+        inputs:
+          versionSpec: '16.x'
 
-steps:
-  - task: NodeTool@0
-    displayName: Use Node.js 16
-    inputs:
-      versionSpec: '16.x'
+      - script: npm install nodemailer
+        displayName: Install nodemailer
 
-  - script: npm install nodemailer
-    displayName: Install nodemailer
-
-  - task: PowerShell@2
-    displayName: Write script to disk
-    inputs:
-      pwsh: false
-      targetType: inline
-      script: |
-        $script = @'
-        'use strict';
-
-        const https      = require('https');
-        const http       = require('http');
-        const nodemailer = require('nodemailer');
-
-        const AZDO_SERVER_URL   = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
-        const AZDO_PAT          = process.env.AZDO_PAT          || '';
-        const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
-        const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
-        const SMTP_HOST         = process.env.SMTP_HOST         || '';
-        const SMTP_PORT         = parseInt(process.env.SMTP_PORT || '25', 10);
-        const SMTP_FROM         = process.env.SMTP_FROM         || '';
-        const SMTP_SECURE       = process.env.SMTP_SECURE === 'true';
-        const SMTP_USER         = process.env.SMTP_USER         || null;
-        const SMTP_PASS         = process.env.SMTP_PASS         || null;
-        const DRY_RUN           = process.env.DRY_RUN === 'true';
-        const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
-
-        const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
-
-        function toDateStr(d) {
-          const y = d.getFullYear();
-          const m = String(d.getMonth() + 1).padStart(2, '0');
-          const day = String(d.getDate()).padStart(2, '0');
-          return `${y}-${m}-${day}`;
-        }
-
-        function formatDisplayDate(dateStr) {
-          const d = new Date(dateStr + 'T00:00:00');
-          return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-        }
-
-        function getLastWeekRange() {
-          const now = new Date();
-          now.setHours(0, 0, 0, 0);
-          const day = now.getDay();
-          const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
-          const monday = new Date(now);
-          monday.setDate(now.getDate() - daysToLastMonday);
-          const sunday = new Date(monday);
-          sunday.setDate(monday.getDate() + 6);
-          return { start: monday, end: sunday };
-        }
-
-        function getMonthKeysForRange(start, end) {
-          const keys = [];
-          const cur = new Date(start.getFullYear(), start.getMonth(), 1);
-          const endMon = new Date(end.getFullYear(), end.getMonth(), 1);
-          while (cur <= endMon) {
-            const y = cur.getFullYear();
-            const m = String(cur.getMonth() + 1).padStart(2, '0');
-            keys.push(`timetracker_${y}_${m}`);
-            cur.setMonth(cur.getMonth() + 1);
-          }
-          return keys;
-        }
-
-        function authHeader() {
-          return 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64');
-        }
-
-        function extDataBase() {
-          return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
-                 `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
-        }
-
-        function fetchJson(url) {
-          return new Promise((resolve, reject) => {
-            const lib = url.startsWith('https') ? https : http;
-            const req = lib.get(url, {
-              headers: { Authorization: authHeader(), Accept: 'application/json' }
-            }, (res) => {
-              let body = '';
-              res.on('data', chunk => body += chunk);
-              res.on('end', () => {
-                if (res.statusCode === 404) { resolve(null); return; }
-                if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0,200)}`)); return; }
-                try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
-              });
-            });
-            req.on('error', reject);
-          });
-        }
-
-        async function fetchDocument(collectionName, debug) {
-          // VSS SDK getValue/setValue always uses the $settings built-in collection
-          const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
-          if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
-          const doc = await fetchJson(url);
-          if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
-          if (!doc) return null;
-          if ('__val__' in doc) return doc.__val__;
-          if ('value' in doc) return doc.value;
-          const result = {};
-          for (const [k, v] of Object.entries(doc)) {
-            if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') result[k] = v;
-          }
-          return result;
-        }
-
-        const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-        function escHtml(str) {
-          return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        }
-
-        function buildEmailHtml(user, days, startStr, endStr) {
-          const total = days.reduce((sum, d) => sum + d.hours, 0);
-          const rows = days.map(d => {
-            const bg = d.hours === 0 ? '#fff4ce' : '#ffffff';
-            const hoursCell = d.hours > 0 ? `<strong>${d.hours.toFixed(1)}</strong>` : `<span style="color:#797775">—</span>`;
-            return `<tr style="background:${bg}"><td style="padding:8px 14px;border-bottom:1px solid #edebe9">${d.dayName}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;color:#605e5c">${formatDisplayDate(d.date)}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;text-align:right">${hoursCell}</td></tr>`;
-          }).join('');
-          return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,sans-serif;font-size:14px;color:#323130"><div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden"><div style="background:#0078d4;padding:20px 28px"><h2 style="margin:0;color:white;font-size:18px">Weekly Hours Summary</h2><p style="margin:4px 0 0;color:#deecf9;font-size:13px">${startStr} &ndash; ${endStr}</p></div><div style="padding:24px 28px"><p style="margin:0 0 16px">Hi <strong>${escHtml(user.userName)}</strong>,</p><p style="margin:0 0 16px;color:#605e5c">Here is your time logging summary for last week:</p><table style="width:100%;border-collapse:collapse;border:1px solid #edebe9"><thead><tr style="background:#f3f2f1"><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Day</th><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Date</th><th style="padding:9px 14px;text-align:right;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Hours</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#f3f2f1;font-weight:600"><td colspan="2" style="padding:9px 14px">Total</td><td style="padding:9px 14px;text-align:right;font-size:16px;color:#0078d4">${total.toFixed(1)}</td></tr></tfoot></table><p style="margin:24px 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">This is an automated weekly reminder from Time Tracker. Please keep your hours up to date in Azure DevOps.</p></div></div></body></html>`;
-        }
-
-        async function main() {
-          const missing = REQUIRED_VARS.filter(v => !process.env[v]);
-          if (missing.length) { console.error('Missing required env vars:', missing.join(', ')); process.exit(1); }
-          if (DRY_RUN) console.log('[DRY RUN] No emails will be sent.');
-
-          let { start, end } = getLastWeekRange();
-          if (OVERRIDE_WEEK_START) {
-            start = new Date(OVERRIDE_WEEK_START + 'T00:00:00');
-            if (isNaN(start.getTime())) { console.error('Invalid OVERRIDE_WEEK_START:', OVERRIDE_WEEK_START); process.exit(1); }
-            end = new Date(start);
-            end.setDate(start.getDate() + 6);
-            console.log('[OVERRIDE] Using specified week.');
-          }
-
-          const startStr = toDateStr(start);
-          const endStr   = toDateStr(end);
-          console.log(`Processing week: ${startStr} -> ${endStr}`);
-
-          const config = await fetchDocument('notification-config', true);
-          console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
-          console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
-
-          // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
-          // Skipped when OVERRIDE_WEEK_START is set (manual test run).
-          if (!OVERRIDE_WEEK_START) {
-            const sched = config && config.schedule;
-            if (sched && sched.utcDay !== undefined && sched.utcHour !== undefined) {
-              const now     = new Date();
-              const curDay  = now.getUTCDay();
-              const curHour = now.getUTCHours();
-              if (curDay !== sched.utcDay || curHour !== sched.utcHour) {
-                console.log(`Not send time. Configured: ${DAY_NAMES[sched.utcDay]} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC. Nothing to do.`);
-                return;
+      - task: PowerShell@2
+        displayName: Write script to disk
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $script = @'
+            'use strict';
+    
+            const https      = require('https');
+            const http       = require('http');
+            const nodemailer = require('nodemailer');
+    
+            const AZDO_SERVER_URL   = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
+            const AZDO_PAT          = process.env.AZDO_PAT          || '';
+            const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
+            const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
+            const SMTP_HOST         = process.env.SMTP_HOST         || '';
+            const SMTP_PORT         = parseInt(process.env.SMTP_PORT || '25', 10);
+            const SMTP_FROM         = process.env.SMTP_FROM         || '';
+            const SMTP_SECURE       = process.env.SMTP_SECURE === 'true';
+            const SMTP_IGNORE_TLS   = process.env.SMTP_IGNORE_TLS === 'true';
+            const SMTP_USER         = process.env.SMTP_USER         || null;
+            const SMTP_PASS         = process.env.SMTP_PASS         || null;
+            const DRY_RUN           = process.env.DRY_RUN === 'true';
+            const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
+    
+            const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
+    
+            function toDateStr(d) {
+              const y = d.getFullYear();
+              const m = String(d.getMonth() + 1).padStart(2, '0');
+              const day = String(d.getDate()).padStart(2, '0');
+              return `${y}-${m}-${day}`;
+            }
+    
+            function formatDisplayDate(dateStr) {
+              const d = new Date(dateStr + 'T00:00:00');
+              return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+            }
+    
+            function getLastWeekRange() {
+              const now = new Date();
+              now.setHours(0, 0, 0, 0);
+              const day = now.getDay();
+              const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
+              const monday = new Date(now);
+              monday.setDate(now.getDate() - daysToLastMonday);
+              const sunday = new Date(monday);
+              sunday.setDate(monday.getDate() + 6);
+              return { start: monday, end: sunday };
+            }
+    
+            function getMonthKeysForRange(start, end) {
+              const keys = [];
+              const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+              const endMon = new Date(end.getFullYear(), end.getMonth(), 1);
+              while (cur <= endMon) {
+                const y = cur.getFullYear();
+                const m = String(cur.getMonth() + 1).padStart(2, '0');
+                keys.push(`timetracker_${y}_${m}`);
+                cur.setMonth(cur.getMonth() + 1);
               }
-              console.log('Schedule matched — proceeding.');
+              return keys;
             }
-          }
-
-          const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
-          if (!enabledUsers.length) { console.log('No users have notifications enabled.'); return; }
-          console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
-
-          const monthKeys = getMonthKeysForRange(start, end);
-          let allEntries = [];
-          for (const key of monthKeys) {
-            const entries = await fetchDocument(key);
-            if (Array.isArray(entries)) allEntries = allEntries.concat(entries);
-          }
-          const weekEntries = allEntries.filter(e => e.date >= startStr && e.date <= endStr);
-          console.log(`${weekEntries.length} entries in range.`);
-
-          const byUser = {};
-          weekEntries.forEach(e => { if (!byUser[e.userId]) byUser[e.userId] = []; byUser[e.userId].push(e); });
-
-          const transportOptions = {
-            host: SMTP_HOST,
-            port: SMTP_PORT,
-            secure: SMTP_SECURE,
-            family: 4,
-            connectionTimeout: 60000,
-            greetingTimeout:   60000,
-            socketTimeout:     120000,
-          };
-          if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
-          const transporter = nodemailer.createTransport(transportOptions);
-
-          let sent = 0, failed = 0;
-          for (const user of enabledUsers) {
-            const entries = byUser[user.userId] || [];
-            const days = [];
-            for (let i = 0; i < 7; i++) {
-              const d = new Date(start); d.setDate(start.getDate() + i);
-              const dateStr = toDateStr(d);
-              const hours = entries.filter(e => e.date === dateStr).reduce((s, e) => s + (Number(e.hours) || 0), 0);
-              days.push({ dayName: DAY_NAMES[d.getDay()], date: dateStr, hours });
+    
+            function authHeader() {
+              return 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64');
             }
-            const ccList = (user.cc || '').split(',').map(s => s.trim()).filter(Boolean);
-            if (DRY_RUN) {
-              console.log(`[DRY RUN] -> ${user.userEmail}${ccList.length ? '  CC: '+ccList.join(', ') : ''}  Total: ${days.reduce((s,d)=>s+d.hours,0).toFixed(1)} h`);
-              days.forEach(d => console.log(`           ${d.dayName.padEnd(10)} ${d.date}  ${d.hours.toFixed(1)} h`));
-              sent++; continue;
+    
+            function extDataBase() {
+              return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
+                     `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
             }
-            try {
-              await transporter.sendMail({ from: SMTP_FROM, to: user.userEmail, cc: ccList.length ? ccList.join(', ') : undefined, subject: `Weekly Hours Summary: ${startStr} - ${endStr}`, html: buildEmailHtml(user, days, startStr, endStr) });
-              console.log(`Sent  -> ${user.userEmail}`);
-              sent++;
-            } catch(e) { console.error(`Failed -> ${user.userEmail}: ${e.message}`); failed++; }
-          }
-          console.log(`Done. Sent: ${sent}, Failed: ${failed}.`);
-          if (failed > 0) process.exit(1);
-        }
-
-        const globalTimeout = setTimeout(() => { console.error('Fatal: script timed out after 10 minutes. Check SMTP_HOST connectivity.'); process.exit(1); }, 600000);
-        globalTimeout.unref();
-        main().catch(err => { console.error('Fatal:', err); process.exit(1); });
-        '@
-        $script | Out-File -FilePath send-weekly-summary.js -Encoding utf8
-
-  - script: node send-weekly-summary.js
-    displayName: Send weekly hour summary emails
-    env:
-      AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
-      AZDO_PAT:               $(AZDO_PAT)
-      AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
-      AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
-      SMTP_HOST:              $(SMTP_HOST)
-      SMTP_PORT:              $(SMTP_PORT)
-      SMTP_FROM:              $(SMTP_FROM)
-      SMTP_SECURE:            $(SMTP_SECURE)
-      SMTP_USER:              $(SMTP_USER)
-      SMTP_PASS:              $(SMTP_PASS)
-      OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
-      DRY_RUN:                ${{ parameters.dry_run }}
+    
+            function fetchJson(url) {
+              return new Promise((resolve, reject) => {
+                const lib = url.startsWith('https') ? https : http;
+                const req = lib.get(url, {
+                  headers: { Authorization: authHeader(), Accept: 'application/json' }
+                }, (res) => {
+                  let body = '';
+                  res.on('data', chunk => body += chunk);
+                  res.on('end', () => {
+                    if (res.statusCode === 404) { resolve(null); return; }
+                    if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0,200)}`)); return; }
+                    try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+                  });
+                });
+                req.on('error', reject);
+              });
+            }
+    
+            async function fetchDocument(collectionName, debug) {
+              // VSS SDK getValue/setValue always uses the $settings built-in collection
+              const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
+              if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
+              const doc = await fetchJson(url);
+              if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
+              if (!doc) return null;
+              if ('__val__' in doc) return doc.__val__;
+              if ('value' in doc) return doc.value;
+              const result = {};
+              for (const [k, v] of Object.entries(doc)) {
+                if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') result[k] = v;
+              }
+              return result;
+            }
+    
+            const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    
+            function escHtml(str) {
+              return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            }
+    
+            function targetStatus(total, target) {
+              if (!target || target <= 0) return { color: '#0078d4', label: null };
+              const pct = total / target;
+              if (pct < 0.50) return { color: '#d13438', label: 'Poor' };
+              if (pct < 0.75) return { color: '#ca5010', label: 'Medium' };
+              if (pct < 1.00) return { color: '#986f0b', label: 'OK (not Good)' };
+              return { color: '#107c10', label: 'Good' };
+            }
+            function buildTotalCell(total, target) {
+              const { color, label } = targetStatus(total, target);
+              if (!target || target <= 0) return `<span style="font-weight:600;font-size:16px;color:${color}">${total.toFixed(1)}</span>`;
+              const pct = Math.round((total / target) * 100);
+              return `<span style="font-weight:600;font-size:16px;color:${color}">${total.toFixed(1)}&thinsp;/&thinsp;${target}</span><br><span style="font-size:11px;color:${color}">${pct}% &mdash; ${label}</span>`;
+            }
+            function buildEmailHtml(user, days, startStr, endStr) {
+              const total  = days.reduce((sum, d) => sum + d.hours, 0);
+              const target = user.targetHours || 0;
+              const rows = days.map(d => {
+                const bg = d.hours === 0 ? '#fff4ce' : '#ffffff';
+                const hoursCell = d.hours > 0 ? `<strong>${d.hours.toFixed(1)}</strong>` : `<span style="color:#797775">—</span>`;
+                return `<tr style="background:${bg}"><td style="padding:8px 14px;border-bottom:1px solid #edebe9">${d.dayName}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;color:#605e5c">${formatDisplayDate(d.date)}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;text-align:right">${hoursCell}</td></tr>`;
+              }).join('');
+              return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,sans-serif;font-size:14px;color:#323130"><div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden"><div style="background:#0078d4;padding:20px 28px"><h2 style="margin:0;color:white;font-size:18px">Weekly Hours Summary</h2><p style="margin:4px 0 0;color:#deecf9;font-size:13px">${startStr} &ndash; ${endStr}</p></div><div style="padding:24px 28px"><p style="margin:0 0 16px">Hi <strong>${escHtml(user.userName)}</strong>,</p><p style="margin:0 0 16px;color:#605e5c">Here is your time logging summary for last week:</p><table style="width:100%;border-collapse:collapse;border:1px solid #edebe9"><thead><tr style="background:#f3f2f1"><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Day</th><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Date</th><th style="padding:9px 14px;text-align:right;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Hours</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#f3f2f1"><td colspan="2" style="padding:9px 14px;font-weight:600">Total</td><td style="padding:9px 14px;text-align:right">${buildTotalCell(total, target)}</td></tr></tfoot></table><p style="margin:24px 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">This is an automated weekly reminder from Time Tracker. Please keep your hours up to date in Azure DevOps.</p></div></div></body></html>`;
+            }
+    
+            async function main() {
+              const missing = REQUIRED_VARS.filter(v => !process.env[v]);
+              if (missing.length) { console.error('Missing required env vars:', missing.join(', ')); process.exit(1); }
+              if (DRY_RUN) console.log('[DRY RUN] No emails will be sent.');
+    
+              let { start, end } = getLastWeekRange();
+              if (OVERRIDE_WEEK_START) {
+                start = new Date(OVERRIDE_WEEK_START + 'T00:00:00');
+                if (isNaN(start.getTime())) { console.error('Invalid OVERRIDE_WEEK_START:', OVERRIDE_WEEK_START); process.exit(1); }
+                end = new Date(start);
+                end.setDate(start.getDate() + 6);
+                console.log('[OVERRIDE] Using specified week.');
+              }
+    
+              const startStr = toDateStr(start);
+              const endStr   = toDateStr(end);
+              console.log(`Processing week: ${startStr} -> ${endStr}`);
+    
+              const config = await fetchDocument('notification-config', true);
+              console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
+              console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
+    
+              // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
+              // Skipped when OVERRIDE_WEEK_START is set (manual test run).
+              if (!OVERRIDE_WEEK_START) {
+                const sched = config && config.schedule;
+                if (sched && sched.utcDay !== undefined && sched.utcHour !== undefined) {
+                  const now     = new Date();
+                  const curDay  = now.getUTCDay();
+                  const curHour = now.getUTCHours();
+                  if (curDay !== sched.utcDay || curHour !== sched.utcHour) {
+                    console.log(`Not send time. Configured: ${DAY_NAMES[sched.utcDay]} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC. Nothing to do.`);
+                    return;
+                  }
+                  console.log('Schedule matched — proceeding.');
+                }
+              }
+    
+              const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
+              if (!enabledUsers.length) { console.log('No users have notifications enabled.'); return; }
+              console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
+    
+              const monthKeys = getMonthKeysForRange(start, end);
+              let allEntries = [];
+              for (const key of monthKeys) {
+                const entries = await fetchDocument(key);
+                if (Array.isArray(entries)) allEntries = allEntries.concat(entries);
+              }
+              const weekEntries = allEntries.filter(e => e.date >= startStr && e.date <= endStr);
+              console.log(`${weekEntries.length} entries in range.`);
+    
+              const byUser = {};
+              weekEntries.forEach(e => { if (!byUser[e.userId]) byUser[e.userId] = []; byUser[e.userId].push(e); });
+    
+              const transportOptions = {
+                host: SMTP_HOST,
+                port: SMTP_PORT,
+                secure: SMTP_SECURE,
+                ignoreTLS: SMTP_IGNORE_TLS,
+                family: 4,
+                connectionTimeout: 60000,
+                greetingTimeout:   60000,
+                socketTimeout:     120000,
+              };
+              if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
+              const transporter = nodemailer.createTransport(transportOptions);
+    
+              const mails = enabledUsers.map(user => {
+                const entries = byUser[user.userId] || [];
+                const days = [];
+                for (let i = 0; i < 7; i++) {
+                  const d = new Date(start); d.setDate(start.getDate() + i);
+                  const dateStr = toDateStr(d);
+                  const hours = entries.filter(e => e.date === dateStr).reduce((s, e) => s + (Number(e.hours) || 0), 0);
+                  days.push({ dayName: DAY_NAMES[d.getDay()], date: dateStr, hours });
+                }
+                const total  = days.reduce((s, d) => s + d.hours, 0);
+                const ccList = (user.cc || '').split(',').map(s => s.trim()).filter(Boolean);
+                return { user, total, mailOptions: { from: SMTP_FROM, to: user.userEmail, cc: ccList.length ? ccList.join(', ') : undefined, subject: `Weekly Hours Summary: ${startStr} - ${endStr}`, html: buildEmailHtml(user, days, startStr, endStr) } };
+              });
+              if (DRY_RUN) {
+                for (const { mailOptions, total } of mails) console.log(`[DRY RUN] -> ${mailOptions.to}${mailOptions.cc ? '  CC: '+mailOptions.cc : ''}  Total: ${total.toFixed(1)} h`);
+                console.log(`Done (dry run). Would send: ${mails.length}.`); return;
+              }
+              const MAX_ROUNDS = 12, RETRY_DELAY = 5 * 60 * 1000;
+              let sent = 0, failed = 0, pending = [...mails];
+              for (let round = 1; round <= MAX_ROUNDS && pending.length > 0; round++) {
+                if (round > 1) { console.log(`Retrying ${pending.length} failed email(s) — round ${round}/${MAX_ROUNDS}, waiting 5 min…`); await new Promise(r => setTimeout(r, RETRY_DELAY)); }
+                const stillFailed = [];
+                for (const item of pending) {
+                  try { await transporter.sendMail(item.mailOptions); console.log(`Sent  -> ${item.mailOptions.to}`); sent++; }
+                  catch(e) { console.warn(`Round ${round} failed -> ${item.mailOptions.to}: ${e.message}`); stillFailed.push(item); }
+                }
+                pending = stillFailed;
+              }
+              failed = pending.length;
+              for (const item of pending) console.error(`Giving up -> ${item.mailOptions.to} after ${MAX_ROUNDS} rounds.`);
+              console.log(`Done. Sent: ${sent}, Failed: ${failed}.`);
+              if (failed > 0) process.exit(1);
+            }
+    
+            const globalTimeout = setTimeout(() => { console.error('Fatal: script timed out after 65 minutes.'); process.exit(1); }, 65 * 60 * 1000);
+            globalTimeout.unref();
+            main().catch(err => { console.error('Fatal:', err); process.exit(1); });
+            '@
+            $script | Out-File -FilePath send-weekly-summary.js -Encoding utf8
+    
+      - script: node send-weekly-summary.js
+        displayName: Send weekly hour summary emails
+        env:
+          AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
+          AZDO_PAT:               $(AZDO_PAT)
+          AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
+          AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
+          SMTP_HOST:              $(SMTP_HOST)
+          SMTP_PORT:              $(SMTP_PORT)
+          SMTP_FROM:              $(SMTP_FROM)
+          SMTP_SECURE:            $(SMTP_SECURE)
+          SMTP_IGNORE_TLS:        $(SMTP_IGNORE_TLS)
+          SMTP_USER:              $(SMTP_USER)
+          SMTP_PASS:              $(SMTP_PASS)
+          OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
+          DRY_RUN:                ${{ parameters.dry_run }}

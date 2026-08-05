@@ -30,8 +30,15 @@
       <button onclick="applyFilters()">Apply</button>
       <button class="secondary" onclick="clearFilters()">Clear</button>
     </div>
+    <div class="filters-add">
+      <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add Entry
+      </button>
+    </div>
   </div>
 
+  <div class="page-scroll">
   <div id="loading" class="loading">Loading…</div>
 
   <div id="content" style="display:none;">
@@ -57,7 +64,13 @@
     </div>
 
     <div class="section">
-      <div class="section-title">This Week</div>
+      <div class="section-header">
+        <div class="section-title" id="weekTitle">This Week</div>
+        <div class="week-nav">
+          <button class="secondary week-nav-btn" onclick="browseWeek(-1)" title="Previous week">&#8249;</button>
+          <button class="secondary week-nav-btn" id="weekNextBtn" onclick="browseWeek(1)" title="Next week" disabled>&#8250;</button>
+        </div>
+      </div>
       <div class="week-strip" id="weekStrip"></div>
     </div>
 
@@ -72,7 +85,7 @@
               <th>This Week</th>
               <th>In Range</th>
               <th>Last Logged</th>
-              <th>Quick Log</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="workBody"></tbody>
@@ -94,14 +107,22 @@
       </div>
     </div>
   </div>
+  </div><!-- /.page-scroll -->
 
   <script>
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
-        document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
-        return true;
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
+        return false;
       }
       var t = '';
       try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
@@ -129,13 +150,19 @@
 
     console.log("[MyTime] Script started");
     var TC = window.TimeCore;
+    var escapeHtml = TC.escapeHtml;
+    var EDIT_ICON  = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
+    var PLUS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
     var currentUser = null;
     var witClient = null;
+    var collectionUri = "";
+    var weekOffset = 0;
     var allMyEntries = [];      // user's entries across the loaded window (live KPI math)
     var filteredEntries = [];   // allMyEntries within the selected From/To range
     var assignedItems = [];     // active work items assigned to @Me
     var closedEntryItemIds = {}; // { idString: true } — entry-only items whose CURRENT state is closed
-
+    var workRowsById = {};      // { idString: row } — last rendered "What You're Working On" rows, for quickAdd()
     var EXCLUDED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
 
     function initializeExtension() {
@@ -154,6 +181,7 @@
 
           var ctx = VSS.getWebContext();
           currentUser = ctx.user;
+          collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
           window.__projectName = ctx.project && ctx.project.name;
 
           var first = (currentUser.name || "").split(/[ ,]/)[0] || currentUser.name;
@@ -362,9 +390,41 @@
       return list.reduce(function(s, e){ return s + (e.hours || 0); }, 0);
     }
 
+    function getViewWeek() {
+      if (weekOffset === 0) return TC.weekDates();
+      var ref = new Date();
+      ref.setDate(ref.getDate() + weekOffset * 7);
+      return TC.weekDates(ref);
+    }
+
+    function browseWeek(delta) {
+      weekOffset += delta;
+      if (weekOffset > 0) weekOffset = 0;
+      renderWeekSection();
+    }
+
+    function renderWeekSection() {
+      var week = getViewWeek();
+      var today = TC.todayISO();
+      renderWeekStrip(week, today);
+      var title;
+      if (weekOffset === 0) {
+        title = 'This Week';
+      } else if (weekOffset === -1) {
+        title = 'Last Week';
+      } else {
+        var d0 = new Date(week[0] + 'T00:00:00');
+        var d6 = new Date(week[6] + 'T00:00:00');
+        title = 'Week of ' + d0.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+                ' – ' + d6.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+      document.getElementById('weekTitle').textContent = title;
+      document.getElementById('weekNextBtn').disabled = weekOffset >= 0;
+    }
+
     function render() {
       var today = TC.todayISO();
-      var week = TC.weekDates();          // Mon..Sun ISO strings
+      var week = TC.weekDates();          // current week for KPI cards + work table
       var weekSet = {};
       week.forEach(function(d){ weekSet[d] = true; });
       var monthPrefix = today.slice(0, 7); // YYYY-MM
@@ -377,7 +437,7 @@
       setCard("cardWeek", weekHours);
       setCard("cardMonth", monthHours);
 
-      renderWeekStrip(week, today);
+      renderWeekSection();
       var untracked = renderWorkTable(week, weekSet);
       document.getElementById("cardUntracked").textContent = untracked;
       document.getElementById("cardUntrackedWrap").classList.toggle("is-warn", untracked > 0);
@@ -459,6 +519,7 @@
       });
 
       var rows = Object.keys(byItem).map(function(k){ return byItem[k]; });
+      workRowsById = byItem;
       // Order: assigned & untracked-this-week first, then most time this week, then most recent.
       rows.sort(function(a, b) {
         var au = (a.assigned && a.weekHours === 0) ? 1 : 0;
@@ -478,7 +539,6 @@
       empty.style.display = "none";
 
       var untracked = 0;
-      var todayVal = TC.todayISO();
       body.innerHTML = rows.map(function(r) {
         var isUntracked = r.assigned && r.weekHours === 0;
         if (isUntracked) untracked++;
@@ -487,20 +547,21 @@
         var parent = r.parentTitle
           ? escapeHtml(r.parentTitle) + (r.parentType ? ' <span class="muted">(' + escapeHtml(r.parentType) + ')</span>' : '')
           : '<span class="muted">—</span>';
+        var wiUrl = getWorkItemUrl(r.id, window.__projectName);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer" class="wi-id">#' + r.id + '</a>'
+          : '<span class="wi-id">#' + r.id + '</span>';
         return '<tr>' +
           '<td>' + typeBadge +
             '<span class="wi-title">' + escapeHtml(r.title || "(untitled)") + '</span> ' +
-            '<span class="wi-id">#' + r.id + '</span>' + nudge + '</td>' +
+            wiIdLabel + nudge + '</td>' +
           '<td>' + parent + '</td>' +
           '<td>' + (r.weekHours ? '<strong>' + r.weekHours.toFixed(1) + 'h</strong>' : '<span class="muted">—</span>') + '</td>' +
           '<td>' + (r.recentHours ? r.recentHours.toFixed(1) + 'h' : '<span class="muted">—</span>') + '</td>' +
           '<td>' + (r.lastDate ? r.lastDate : '<span class="muted">—</span>') + '</td>' +
-          '<td><div class="quicklog">' +
-            '<input type="number" min="0.25" max="24" step="0.25" placeholder="h" id="ql-h-' + r.id + '" ' +
-              'onkeydown="return event.key !== \'e\' && event.key !== \'E\' && event.key !== \'+\' && event.key !== \'-\'">' +
-            '<input type="date" id="ql-d-' + r.id + '" value="' + todayVal + '">' +
-            '<button id="ql-b-' + r.id + '" onclick="quickLog(' + r.id + ')">Log</button>' +
-          '</div></td>' +
+          '<td class="actions-cell">' +
+            '<button class="icon-btn add-btn" title="Log time" onclick="quickAdd(' + r.id + ')">' + PLUS_ICON + '</button>' +
+          '</td>' +
         '</tr>';
       }).join("");
       return untracked;
@@ -521,44 +582,91 @@
       }
       empty.style.display = "none";
       body.innerHTML = sorted.map(function(e) {
+        var wiUrl = getWorkItemUrl(e.workItemId, e.teamProject);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer" class="wi-id">#' + e.workItemId + '</a>'
+          : '<span class="wi-id">#' + e.workItemId + '</span>';
         return '<tr>' +
           '<td>' + e.date + '</td>' +
-          '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> <span class="wi-id">#' + e.workItemId + '</span></td>' +
+          '<td><span class="wi-title">' + escapeHtml(e.workItemTitle || "") + '</span> ' + wiIdLabel + '</td>' +
           '<td>' + (e.description ? escapeHtml(e.description) : '<span class="muted">—</span>') + '</td>' +
           '<td><strong>' + e.hours + 'h</strong></td>' +
-          '<td><button class="delete-btn" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">Delete</button></td>' +
+          '<td class="actions-cell">' +
+            '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
+            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\',\'' + e.date + '\')">' + DELETE_ICON + '</button>' +
+          '</td>' +
         '</tr>';
       }).join("");
     }
 
-    function quickLog(workItemId) {
-      var hEl = document.getElementById("ql-h-" + workItemId);
-      var dEl = document.getElementById("ql-d-" + workItemId);
-      var bEl = document.getElementById("ql-b-" + workItemId);
-      var hours = parseFloat(hEl.value);
-      var date = dEl.value;
+    function quickAdd(workItemId) {
+      var row = workRowsById[String(workItemId)];
+      var seen = {}, recent = [];
+      allMyEntries.slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      assignedItems.forEach(function(wi) {
+        var k = String(wi.id);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: wi.id, title: wi.title, type: wi.type }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: window.__projectName,
+        recentItems: recent.slice(0, 20),
+        initialItem: { id: workItemId, title: (row && row.title) || '(untitled)', type: (row && row.type) || null },
+        onSaved: function() { showMessage('Time logged!', 'success'); reloadAll(); }
+      });
+    }
 
-      if (!hours || hours <= 0 || hours > 24) { showMessage("Enter valid hours (0.25 – 24)", "error"); return; }
-      if (!date) { showMessage("Pick a date", "error"); return; }
+    function getWorkItemUrl(wiId, teamProject) {
+      var base = collectionUri.replace(/\/$/, "");
+      var proj = teamProject || window.__projectName || "";
+      if (!base || !proj) return null;
+      return base + "/" + encodeURIComponent(proj) + "/_workitems/edit/" + wiId;
+    }
 
-      bEl.disabled = true;
-      getWitClient().then(function(client) {
-        return TC.buildEntryForWorkItem(client, workItemId, currentUser, { hours: hours, date: date, description: "" });
-      }).then(function(entry) {
-        return TC.saveEntry(window.dataService, entry);
-      }).then(function() {
-        showMessage("Logged " + hours + "h to #" + workItemId, "success");
-        return reloadAll();
-      }).catch(function(err) {
-        console.error("[MyTime] quickLog failed:", err);
-        showMessage("Error: " + (err && err.message ? err.message : "could not log time"), "error");
-        if (bEl) bEl.disabled = false;
+    function editEntry(entryId) {
+      var entry = allMyEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { showMessage('Entry not found', 'error'); return; }
+      var seen = {}, recent = [];
+      allMyEntries.slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      assignedItems.forEach(function(wi) {
+        var k = String(wi.id);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: wi.id, title: wi.title, type: wi.type }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: window.__projectName,
+        recentItems: recent.slice(0, 20),
+        title: 'Edit Time Entry',
+        saveLabel: 'Save',
+        initialItem: { id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null },
+        initialHours: entry.hours,
+        initialDate: entry.date,
+        initialDesc: entry.description,
+        entryId: entry.id,
+        originalDate: entry.date,
+        onSaved: function() { showMessage('Entry updated!', 'success'); reloadAll(); }
       });
     }
 
     function deleteEntry(entryId, entryDate) {
       if (!confirm("Delete this time entry?")) return;
-      TC.deleteEntryById(window.dataService, entryId, entryDate).then(function() {
+      getWitClient().then(function(client) {
+        return TC.deleteEntryById(window.dataService, entryId, entryDate, client);
+      }).then(function() {
         showMessage("Entry deleted", "success");
         return reloadAll();
       }).catch(function(err) {
@@ -567,21 +675,39 @@
       });
     }
 
+    function openAddEntry() {
+      var seen = {}, recent = [];
+      // Items from recent entries first (most recently logged date first),
+      // then active assigned items not yet in the list.
+      allMyEntries.slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      assignedItems.forEach(function(wi) {
+        var k = String(wi.id);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: wi.id, title: wi.title, type: wi.type }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: window.__projectName,
+        recentItems: recent.slice(0, 20),
+        onSaved: function() { showMessage('Time logged!', 'success'); reloadAll(); }
+      });
+    }
+
     function showMessage(text, type) {
       var msg = document.getElementById("message");
       msg.textContent = text;
       msg.className = "message " + type;
       msg.style.display = "block";
-      window.scrollTo({ top: 0, behavior: "smooth" });
       setTimeout(function(){ msg.style.display = "none"; }, 3500);
     }
 
-    function escapeHtml(text) {
-      if (text == null) return "";
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
-    }
   </script>
+
 </body>
 </html>

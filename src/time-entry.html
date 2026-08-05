@@ -5,6 +5,7 @@
   <title>Time Entry</title>
   <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme) / saved user-theme; default is light, never the OS setting -->
   <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-entry.css">
 </head>
@@ -41,7 +42,7 @@
       </div>
       
       <div class="form-group">
-        <label for="description">Description (optional, max 100 chars)</label>
+        <label for="description">Description (required, max 100 chars)</label>
         <textarea id="description" rows="2" maxlength="100" placeholder="What did you work on?"></textarea>
       </div>
       
@@ -59,7 +60,19 @@
     function applyDevOpsTheme() {
       function applyIfExplicit(t) {
         if (!t) return false;
-        // A non-empty theme that isn't a dark variant (e.g. "Default") means light.
+        // IMPORTANT — keep this simple toggle, do NOT copy the hub-page version here.
+        //
+        // This page runs as a sandboxed work-item-form contribution (cross-origin
+        // iframe). VSS context theme values are unreliable in this context, so the
+        // best-effort toggle below may be wrong. It does not matter: the async
+        // dataService.getValue('user-theme') call further down always overwrites it
+        // once it resolves. That async read is the real source of truth here.
+        //
+        // The hub-page version of applyIfExplicit returns false for unrecognised
+        // theme strings, letting execution fall through to the luminance-based
+        // parent-page background read. That fallback throws (cross-origin) in a
+        // sandboxed iframe, causing a flash to the wrong theme. Always returning
+        // true here prevents that fallback from running at all.
         document.documentElement.classList.toggle('dark', String(t).toLowerCase().indexOf('dark') !== -1);
         return true;
       }
@@ -94,13 +107,19 @@
     let currentUser = null;
     const STORAGE_KEY_PREFIX = "timetracker_";
     const LEGACY_STORAGE_KEY = "timetracker_entries";
-
-    // Helper function to get storage key for a given date
-    function getStorageKeyForDate(dateString) {
-      var date = new Date(dateString);
-      var year = date.getFullYear();
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      return STORAGE_KEY_PREFIX + year + "_" + month;
+    var TC = window.TimeCore;
+    var EDIT_ICON = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
+    var escapeHtml = TC.escapeHtml;
+    var witClientCache = null;
+    function getWitClient() {
+      if (witClientCache) return Promise.resolve(witClientCache);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          witClientCache = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(witClientCache);
+        });
+      });
     }
 
     // Wait for VSS SDK to be available
@@ -134,7 +153,7 @@
             console.log("[TimeTracker] Got extension data service");
             window.dataService = dataService;
             // Theme detection is blocked in sandboxed work-item-form iframes.
-            // Hub pages (time-report, notification-settings) save the detected theme
+            // Hub pages (time-report, settings) save the detected theme
             // to ExtensionData; read it here and apply it.
             dataService.getValue('user-theme', { scopeType: 'User' }).then(function(t) {
               if (t === 'dark')  document.documentElement.classList.add('dark');
@@ -143,6 +162,7 @@
 
             var webContext = VSS.getWebContext();
             currentUser = webContext.user;
+            window.__projectName = webContext.project && webContext.project.name;
             console.log("[TimeTracker] Current user:", currentUser.name);
 
             // Register work item notification and field observer
@@ -210,7 +230,7 @@
         // Group entries by month
         var entriesByMonth = {};
         legacyData.forEach(function(entry) {
-          var key = getStorageKeyForDate(entry.date);
+          var key = TC.getStorageKeyForDate(entry.date);
           if (!entriesByMonth[key]) {
             entriesByMonth[key] = [];
           }
@@ -273,41 +293,6 @@
       });
     }
 
-    // Save a new entry to the appropriate monthly partition
-    function saveEntry(entry) {
-      var storageKey = getStorageKeyForDate(entry.date);
-      console.log("[TimeTracker] Saving entry to partition:", storageKey, "Entry:", entry);
-
-      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
-        var monthEntries = data || [];
-        console.log("[TimeTracker] Current entries in partition:", monthEntries.length);
-        monthEntries.push(entry);
-        console.log("[TimeTracker] After adding new entry:", monthEntries.length);
-        return window.dataService.setValue(storageKey, monthEntries, { scopeType: "Default" });
-      }).then(function(result) {
-        console.log("[TimeTracker] Save completed successfully");
-        return result;
-      }, function(err) {
-        console.error("[TimeTracker] Save failed:", err);
-        throw err;
-      });
-    }
-
-    // Delete an entry from its monthly partition
-    function deleteEntryById(entryId, entryDate) {
-      var storageKey = getStorageKeyForDate(entryDate);
-
-      return window.dataService.getValue(storageKey, { scopeType: "Default" }).then(function(data) {
-        if (!data || data.length === 0) {
-          throw new Error("No entries found for this month — aborting delete to prevent data loss");
-        }
-        var filtered = data.filter(function(e) {
-          return e.id !== entryId;
-        });
-        return window.dataService.setValue(storageKey, filtered, { scopeType: "Default" });
-      });
-    }
-
     // Possible field reference names for Client (varies by where field was created in Azure DevOps)
     var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
     var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
@@ -322,6 +307,17 @@
       return defaultValue;
     }
 
+    function mergeTags(existing, additional) {
+      if (!additional) return existing;
+      if (!existing) return additional;
+      var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
+      additional.split(";").forEach(function(t) {
+        var trimmed = t.trim();
+        if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
+      });
+      return seen.join("; ");
+    }
+
     // Get all possible field names for API requests
     function getAllClientFieldRefs() {
       return CLIENT_FIELD_REFS.slice();
@@ -333,7 +329,7 @@
     function saveTimeEntry() {
       var hours = parseFloat(document.getElementById("hours").value);
       var date = document.getElementById("date").value;
-      var description = document.getElementById("description").value;
+      var description = document.getElementById("description").value.trim();
 
       if (!hours || hours <= 0 || hours > 24) {
         showMessage("Please enter valid hours (0.25 - 24)", "error");
@@ -341,6 +337,10 @@
       }
       if (!date) {
         showMessage("Please select a date", "error");
+        return;
+      }
+      if (!description) {
+        showMessage("Please enter a description", "error");
         return;
       }
 
@@ -354,10 +354,12 @@
         // This avoids 400 errors when some custom fields don't exist
 
         function createEntry(workItem) {
+          var ctx = VSS.getWebContext();
           return {
             id: Date.now().toString(),
             workItemId: workItemId,
             workItemTitle: workItem.fields["System.Title"],
+            teamProject: workItem.fields["System.TeamProject"] || (ctx.project || {}).name || "",
             parentId: workItem.fields["System.Parent"] || null,
             tags: workItem.fields["System.Tags"] || "",
             project: getFieldValue(workItem.fields, PROJECT_FIELD_REFS, "(No Project)"),
@@ -375,98 +377,34 @@
         function processWorkItem(workItem) {
           var entry = createEntry(workItem);
 
-          // If there's a parent, get its details (could be an Epic or Feature)
-          // Use expand=All (4) to get all fields including System.Parent
-          var parentPromise = entry.parentId
-            ? witClient.getWorkItem(entry.parentId, null, null, 4)
-            : Promise.resolve(null);
+          TC.resolveAncestry(witClient, workItem).then(function(anc) {
+            entry.parentTitle = anc.parentTitle;
+            entry.parentType = anc.parentType;
+            entry.epicId = anc.epicId;
+            entry.epicTitle = anc.epicTitle;
+            entry.ancestorIds = anc.ancestors.map(function(item) { return item.id; });
 
-          parentPromise.then(function(parentItem) {
-            if (parentItem) {
-              entry.parentTitle = parentItem.fields["System.Title"];
-              entry.parentType = parentItem.fields["System.WorkItemType"];
+            anc.ancestors.forEach(function(item) {
+              if (item.fields["System.Tags"]) {
+                entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
+              }
+              var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
 
-              // Inherit tags from parent if task has no tags
-              if (!entry.tags && parentItem.fields["System.Tags"]) {
-                entry.tags = parentItem.fields["System.Tags"];
-                entry.tagsInheritedFrom = "parent";
+              var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
+              if (entry.project === "(No Project)" && itemProject) {
+                entry.project = itemProject;
+                entry.projectInheritedFrom = inheritedFrom;
               }
 
-              // Inherit project from parent if task has no project
-              var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
-              if (entry.project === "(No Project)" && parentProject) {
-                entry.project = parentProject;
-                entry.projectInheritedFrom = "parent";
+              var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
+              if (entry.client === "(No Client)" && itemClient) {
+                entry.client = itemClient;
+                entry.clientInheritedFrom = inheritedFrom;
               }
-
-              // Inherit client from parent if task has no client
-              var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
-              if (entry.client === "(No Client)" && parentClient) {
-                entry.client = parentClient;
-                entry.clientInheritedFrom = "parent";
-              }
-
-              // If parent is an Epic, use it directly and inherit remaining properties
-              if (parentItem.fields["System.WorkItemType"] === "Epic") {
-                entry.epicId = entry.parentId;
-                entry.epicTitle = entry.parentTitle;
-
-                // Inherit project from Epic if still no project (reuse parentProject from above)
-                if (entry.project === "(No Project)" && parentProject) {
-                  entry.project = parentProject;
-                  entry.projectInheritedFrom = "epic";
-                }
-
-                // Inherit client from Epic if still no client (reuse parentClient from above)
-                if (entry.client === "(No Client)" && parentClient) {
-                  entry.client = parentClient;
-                  entry.clientInheritedFrom = "epic";
-                }
-
-                return { parentItem: parentItem, grandparentItem: null };
-              }
-
-              // If parent has a parent, try to get it (could be Epic)
-              if (parentItem.fields["System.Parent"]) {
-                return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4).then(function(grandparentItem) {
-                  return { parentItem: parentItem, grandparentItem: grandparentItem };
-                });
-              }
-            }
-            return { parentItem: parentItem, grandparentItem: null };
-          }).then(function(result) {
-            var parentItem = result ? result.parentItem : null;
-            var grandparentItem = result ? result.grandparentItem : null;
-
-            if (grandparentItem) {
-              if (grandparentItem.fields["System.WorkItemType"] === "Epic") {
-                entry.epicId = grandparentItem.id;
-                entry.epicTitle = grandparentItem.fields["System.Title"];
-
-                // Inherit tags from grandparent (Epic) if still no tags
-                if (!entry.tags && grandparentItem.fields["System.Tags"]) {
-                  entry.tags = grandparentItem.fields["System.Tags"];
-                  entry.tagsInheritedFrom = "epic";
-                }
-
-                // Inherit project from grandparent (Epic) if still no project
-                var grandparentProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
-                if (entry.project === "(No Project)" && grandparentProject) {
-                  entry.project = grandparentProject;
-                  entry.projectInheritedFrom = "epic";
-                }
-
-                // Inherit client from grandparent (Epic) if still no client
-                var grandparentClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
-                if (entry.client === "(No Client)" && grandparentClient) {
-                  entry.client = grandparentClient;
-                  entry.clientInheritedFrom = "epic";
-                }
-              }
-            }
+            });
 
             // Save entry to monthly partition
-            saveEntry(entry).then(function() {
+            TC.saveEntry(window.dataService, entry, witClient).then(function() {
               showMessage("Time entry saved!", "success");
               document.getElementById("hours").value = "";
               document.getElementById("description").value = "";
@@ -514,16 +452,17 @@
         }, 0);
 
         listEl.innerHTML = workItemEntries.map(function(e) {
-          var canDelete = e.userId === currentUser.id;
+          var canModify = e.userId === currentUser.id;
           return '<div class="time-entry-item">' +
             '<div class="entry-info">' +
               '<span class="entry-user">' + escapeHtml(e.userName) + '</span>' +
               '<span class="entry-date">' + e.date + '</span>' +
               (e.description ? '<span class="entry-description">' + escapeHtml(e.description) + '</span>' : '') +
             '</div>' +
-            '<div style="display: flex; align-items: center; gap: 8px;">' +
+            '<div style="display: flex; align-items: center; gap: 4px;">' +
               '<span class="entry-hours">' + e.hours + 'h</span>' +
-              (canDelete ? '<button class="delete-btn" onclick="deleteEntry(\'' + e.id + '\')">Delete</button>' : '') +
+              (canModify ? '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' : '') +
+              (canModify ? '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\')">' + DELETE_ICON + '</button>' : '') +
             '</div>' +
           '</div>';
         }).join("");
@@ -546,18 +485,18 @@
           showMessage("Entry not found", "error");
           return;
         }
+        if (!currentUser || entry.userId !== currentUser.id) {
+          showMessage("You can only delete your own entries", "error");
+          return;
+        }
 
-        return deleteEntryById(entryId, entry.date);
+        return getWitClient().then(function(client) {
+          return TC.deleteEntryById(window.dataService, entryId, entry.date, client);
+        });
       }).then(function() {
         showMessage("Entry deleted", "success");
         loadTimeEntries();
       });
-    }
-
-    function escapeHtml(text) {
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
     }
 
     // Setup field observer for state changes
@@ -609,11 +548,8 @@
       // Set default date to today
       nudgeDate.valueAsDate = new Date();
 
-      // Show the banner with animation
       banner.style.display = "block";
-
-      // Scroll to top to make it visible
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      document.getElementById("app").scrollTo({ top: 0, behavior: "smooth" });
     }
 
     // Dismiss the nudge banner
@@ -649,6 +585,30 @@
 
       // Trigger the save
       saveTimeEntry();
+    }
+
+    function editEntry(entryId) {
+      getAllEntries().then(function(entries) {
+        var entry = entries.find(function(e) { return e.id === entryId; });
+        if (!entry) { showMessage('Entry not found', 'error'); return; }
+        if (!currentUser || entry.userId !== currentUser.id) { showMessage('You can only edit your own entries', 'error'); return; }
+        TC.openAddEntryModal({
+          dataService: window.dataService,
+          witClientGetter: getWitClient,
+          currentUser: currentUser,
+          projectName: window.__projectName,
+          recentItems: [{ id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null }],
+          title: 'Edit Time Entry',
+          saveLabel: 'Save',
+          initialItem: { id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null },
+          initialHours: entry.hours,
+          initialDate: entry.date,
+          initialDesc: entry.description,
+          entryId: entry.id,
+          originalDate: entry.date,
+          onSaved: function() { showMessage('Entry updated', 'success'); loadTimeEntries(); }
+        });
+      });
     }
   </script>
 </body>

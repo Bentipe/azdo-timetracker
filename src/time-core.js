@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
    time-core.js — shared storage + entry logic
 
    Loaded as a plain <script> (no build step), exposes window.TimeCore.
@@ -21,6 +21,64 @@
       if (fields[refNames[i]]) return fields[refNames[i]];
     }
     return defaultValue;
+  }
+
+  function checkIsAdmin() {
+    var ctx = VSS.getWebContext();
+    var base = ctx.collection.uri.replace(/\/$/, '');
+    var userId = ctx.user.id;
+    var projectName = ctx.project.name;
+    var headers = { 'Accept': 'application/json' };
+
+    function normalizeId(id) {
+      return String(id || '').toLowerCase().replace(/[{}]/g, '');
+    }
+
+    var groupUrl = base + '/_apis/Identities' +
+      '?searchFilter=General' +
+      '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
+      '&queryMembership=Expanded' +
+      '&api-version=5.1';
+
+    var userUrl = base + '/_apis/Identities' +
+      '?identityIds=' + encodeURIComponent(userId) +
+      '&api-version=5.1';
+
+    return Promise.all([
+      fetch(groupUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('Group lookup HTTP ' + r.status);
+        return r.json();
+      }),
+      fetch(userUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('User lookup HTTP ' + r.status);
+        return r.json();
+      })
+    ]).then(function(results) {
+      var groupData = results[0], userData = results[1];
+      if (!groupData || !groupData.value || !groupData.value.length) throw new Error('Group not found');
+      if (!userData  || !userData.value  || !userData.value.length)  throw new Error('User identity not found');
+
+      var members        = groupData.value[0].members || groupData.value[0].memberIds || [];
+      var userDescriptor = userData.value[0].descriptor || '';
+      var normUserId     = normalizeId(userId);
+
+      return members.some(function(m) {
+        var id = typeof m === 'string' ? m : ((m && m.id) || '');
+        return normalizeId(id) === normUserId ||
+               id.toLowerCase() === userDescriptor.toLowerCase();
+      });
+    }).catch(function() { return false; });
+  }
+
+  function mergeTags(existing, additional) {
+    if (!additional) return existing;
+    if (!existing) return additional;
+    var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
+    additional.split(";").forEach(function(t) {
+      var trimmed = t.trim();
+      if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
+    });
+    return seen.join("; ");
   }
 
   // ---- Date helpers ------------------------------------------------
@@ -131,23 +189,263 @@
     });
   }
 
-  function saveEntry(dataService, entry) {
+  function saveEntry(dataService, entry, witClient) {
     var key = getStorageKeyForDate(entry.date);
     return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
       var monthEntries = data || [];
       monthEntries.push(entry);
-      return dataService.setValue(key, monthEntries, { scopeType: "Default" });
+      return dataService.setValue(key, monthEntries, { scopeType: "Default" }).then(function (result) {
+        return recalcTotalHours(dataService, witClient, [entry]).then(function () { return result; });
+      });
     });
   }
 
-  function deleteEntryById(dataService, entryId, entryDate) {
+  function deleteEntryById(dataService, entryId, entryDate, witClient) {
     var key = getStorageKeyForDate(entryDate);
     return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
       if (!data || data.length === 0) {
         throw new Error("No entries found for this month — aborting delete to prevent data loss");
       }
+      var removed = data.find(function (e) { return e.id === entryId; });
       var filtered = data.filter(function (e) { return e.id !== entryId; });
-      return dataService.setValue(key, filtered, { scopeType: "Default" });
+      return dataService.setValue(key, filtered, { scopeType: "Default" }).then(function (result) {
+        return recalcTotalHours(dataService, witClient, [removed]).then(function () { return result; });
+      });
+    });
+  }
+
+  // ---- Total-hours field propagation --------------------------------
+  // Admins can configure a work item field (Settings page) that should
+  // hold the sum of every hour logged on that item AND cascading up
+  // through its ancestor chain — so a Feature/Epic's field reflects its
+  // own direct hours plus every descendant's, no matter how deep.
+  //
+  // Every add/edit/delete triggers a FULL recomputation from the source
+  // entries — never an incremental delta. A running delta has two fatal
+  // flaws: it's a read-modify-write race under concurrent edits, and it
+  // never self-corrects when a work item is re-parented to a different
+  // epic in Azure DevOps (the hours stay stuck on the old epic forever).
+  // A full recompute has neither problem — it always writes an absolute,
+  // freshly-derived total, and any subsequent touch anywhere in the
+  // hierarchy re-derives it from scratch. Best-effort throughout: a
+  // failed field write never blocks the entry save/edit/delete itself.
+
+  var SETTINGS_KEY = "timetracker_settings";
+  // Guaranteed recompute coverage, regardless of the knownMonthKeys registry
+  // below — keeps a fresh install correct without needing a backfill first.
+  var TOTAL_HOURS_LOOKBACK_MONTHS = 60;
+
+  function getSettings(dataService) {
+    return dataService.getValue(SETTINGS_KEY, { scopeType: "Default" }).then(function (cfg) {
+      return cfg || {};
+    }, function () {
+      return {};
+    });
+  }
+
+  // The work item itself plus every ancestor recorded on the entry
+  // (nearest first, epic last if one was found).
+  function chainIdsFor(entry) {
+    var ids = [entry.workItemId];
+    (entry.ancestorIds || []).forEach(function (id) {
+      if (ids.indexOf(id) === -1) ids.push(id);
+    });
+    return ids;
+  }
+
+  // Re-resolves a work item's CURRENT ancestor chain (live from Azure
+  // DevOps) and folds it onto a copy of the entry. Called on every edit
+  // so a re-parented Feature/Epic self-heals the next time any of its
+  // entries are touched, instead of staying stuck on stale data forever.
+  // Falls back to the entry's existing chain if the work item can't be read.
+  function refreshEntryAncestry(witClient, entry) {
+    return witClient.getWorkItem(entry.workItemId, null, null, 4).then(function (workItem) {
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        return Object.assign({}, entry, {
+          parentId: anc.parentId,
+          parentTitle: anc.parentTitle,
+          parentType: anc.parentType,
+          epicId: anc.epicId,
+          epicTitle: anc.epicTitle,
+          ancestorIds: anc.ancestors.map(function (a) { return a.id; })
+        });
+      });
+    }).catch(function () { return entry; });
+  }
+
+  // touchedEntries: entry snapshots (old and/or new state; nulls allowed)
+  // whose ancestor chains define which work items need recomputing.
+  function recalcTotalHours(dataService, witClient, touchedEntries) {
+    if (!witClient) return Promise.resolve();
+    return getSettings(dataService).then(function (settings) {
+      var fieldRef = settings.totalHoursField;
+      if (!fieldRef) return;
+
+      var idSet = {};
+      var known = (settings.knownMonthKeys || []).slice();
+      var knownSet = {};
+      known.forEach(function (k) { knownSet[k] = true; });
+      var registryChanged = false;
+
+      (touchedEntries || []).filter(Boolean).forEach(function (e) {
+        chainIdsFor(e).forEach(function (id) { idSet[id] = true; });
+        if (e.date) {
+          var mk = getStorageKeyForDate(e.date);
+          if (!knownSet[mk]) { knownSet[mk] = true; known.push(mk); registryChanged = true; }
+        }
+      });
+
+      var ids = Object.keys(idSet);
+      if (!ids.length) return;
+
+      var registerPromise = registryChanged
+        ? dataService.setValue(SETTINGS_KEY, Object.assign({}, settings, { knownMonthKeys: known }), { scopeType: "Default" })
+        : Promise.resolve();
+
+      return registerPromise.then(function () {
+        var fixedKeys = monthKeysBetween(
+          new Date(new Date().getFullYear(), new Date().getMonth() - TOTAL_HOURS_LOOKBACK_MONTHS, 1),
+          new Date()
+        );
+        var keySet = {};
+        fixedKeys.forEach(function (k) { keySet[k] = true; });
+        known.forEach(function (k) { keySet[k] = true; });
+        return loadEntriesForKeys(dataService, Object.keys(keySet));
+      }).then(function (allEntries) {
+        return Promise.all(ids.map(function (idStr) {
+          var id = parseInt(idStr, 10);
+          var total = 0;
+          allEntries.forEach(function (e) {
+            if (chainIdsFor(e).indexOf(id) !== -1) total += (e.hours || 0);
+          });
+          return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
+            .catch(function (err) {
+              console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
+            });
+        }));
+      });
+    });
+  }
+
+  var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+  var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+  function escapeHtml(text) {
+    if (text == null) return "";
+    var div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // Re-resolves ancestry before applying `updates`, but only when the
+  // total-hours field is actually configured (otherwise this would cost
+  // an extra Azure DevOps round trip on every plain hours/date edit for
+  // installs that don't use the feature at all).
+  function maybeRefreshAncestry(dataService, witClient, entry) {
+    if (!witClient || !entry) return Promise.resolve(entry);
+    return getSettings(dataService).then(function (settings) {
+      return settings.totalHoursField ? refreshEntryAncestry(witClient, entry) : entry;
+    });
+  }
+
+  function updateEntry(dataService, entryId, originalDate, updates, witClient) {
+    var originalKey = getStorageKeyForDate(originalDate);
+    var newKey = getStorageKeyForDate(updates.date);
+    if (originalKey === newKey) {
+      return dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
+        var oldEntry = (data || []).find(function(e) { return e.id === entryId; });
+        if (!oldEntry) throw new Error("Entry not found");
+        return maybeRefreshAncestry(dataService, witClient, oldEntry).then(function (refreshed) {
+          var newEntry = Object.assign({}, refreshed, updates);
+          var updated = data.map(function(e) {
+            return e.id === entryId ? newEntry : e;
+          });
+          return dataService.setValue(originalKey, updated, { scopeType: "Default" }).then(function (result) {
+            return recalcTotalHours(dataService, witClient, [oldEntry, newEntry]).then(function () { return result; });
+          });
+        });
+      });
+    }
+    return Promise.all([
+      dataService.getValue(originalKey, { scopeType: "Default" }),
+      dataService.getValue(newKey, { scopeType: "Default" })
+    ]).then(function(results) {
+      var oldEntries = results[0] || [];
+      var newEntries = results[1] || [];
+      var entryToMove = oldEntries.find(function(e) { return e.id === entryId; });
+      if (!entryToMove) throw new Error("Entry not found in original month");
+      return maybeRefreshAncestry(dataService, witClient, entryToMove).then(function (refreshed) {
+        var updatedEntry = Object.assign({}, refreshed, updates);
+        return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
+          return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" }).then(function (result) {
+            return recalcTotalHours(dataService, witClient, [entryToMove, updatedEntry]).then(function () { return result; });
+          });
+        });
+      });
+    });
+  }
+
+  // ---- Ancestry resolution (parent + epic, arbitrary depth) --------
+  // Climbs System.Parent links until it finds a work item of type
+  // "Epic" (or runs out of ancestors / hits the depth guard). Used by
+  // both new-entry creation and the report's "Re-sync" action so the
+  // two stay consistent.
+  //
+  // Returns { parentId, parentTitle, parentType, epicId, epicTitle, ancestors }
+  // `ancestors` is the climbed chain (nearest first, epic last if found)
+  // so callers can inherit tags/project/client from every level, however
+  // deep, instead of stopping after the parent and grandparent.
+  var MAX_ANCESTOR_DEPTH = 25;
+
+  function resolveAncestry(witClient, workItem) {
+    var isEpic = workItem.fields["System.WorkItemType"] === "Epic";
+    var immediateParentId = workItem.fields["System.Parent"] || null;
+    var result = {
+      parentId: immediateParentId,
+      parentTitle: null,
+      parentType: null,
+      // An epic is its own epic — this is what lets entries logged
+      // directly on an epic still show up under the Epic filter/grouping.
+      epicId: isEpic ? workItem.id : null,
+      epicTitle: isEpic ? workItem.fields["System.Title"] : null,
+      ancestors: []
+    };
+
+    if (!immediateParentId) return Promise.resolve(result);
+
+    var visited = {};
+    visited[workItem.id] = true;
+
+    return witClient.getWorkItem(immediateParentId, null, null, 4).then(function (parentItem) {
+      result.parentTitle = parentItem.fields["System.Title"];
+      result.parentType = parentItem.fields["System.WorkItemType"];
+      result.ancestors.push(parentItem);
+      visited[parentItem.id] = true;
+
+      // We already know our own epic-ness; no need to hunt further up.
+      if (isEpic) return result;
+
+      if (parentItem.fields["System.WorkItemType"] === "Epic") {
+        result.epicId = parentItem.id;
+        result.epicTitle = parentItem.fields["System.Title"];
+        return result;
+      }
+
+      function climb(id, depth) {
+        if (!id || visited[id] || depth > MAX_ANCESTOR_DEPTH) return Promise.resolve();
+        visited[id] = true;
+        return witClient.getWorkItem(id, null, null, 4).then(function (ancestor) {
+          result.ancestors.push(ancestor);
+          if (ancestor.fields["System.WorkItemType"] === "Epic") {
+            result.epicId = ancestor.id;
+            result.epicTitle = ancestor.fields["System.Title"];
+            return;
+          }
+          return climb(ancestor.fields["System.Parent"], depth + 1);
+        });
+      }
+
+      return climb(parentItem.fields["System.Parent"], 1).then(function () { return result; });
     });
   }
 
@@ -175,79 +473,307 @@
         createdAt: new Date().toISOString()
       };
 
-      var parentPromise = entry.parentId
-        ? witClient.getWorkItem(entry.parentId, null, null, 4)
-        : Promise.resolve(null);
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        entry.parentTitle = anc.parentTitle;
+        entry.parentType = anc.parentType;
+        entry.epicId = anc.epicId;
+        entry.epicTitle = anc.epicTitle;
+        entry.ancestorIds = anc.ancestors.map(function (item) { return item.id; });
 
-      return parentPromise.then(function (parentItem) {
-        if (parentItem) {
-          entry.parentTitle = parentItem.fields["System.Title"];
-          entry.parentType = parentItem.fields["System.WorkItemType"];
+        anc.ancestors.forEach(function (item) {
+          if (item.fields["System.Tags"]) {
+            entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
+          }
+          var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
 
-          if (!entry.tags && parentItem.fields["System.Tags"]) {
-            entry.tags = parentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "parent";
+          var itemProject = getFieldValue(item.fields, PROJECT_FIELD_REFS, null);
+          if (entry.project === "(No Project)" && itemProject) {
+            entry.project = itemProject;
+            entry.projectInheritedFrom = inheritedFrom;
           }
 
-          var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && parentProject) {
-            entry.project = parentProject;
-            entry.projectInheritedFrom = "parent";
+          var itemClient = getFieldValue(item.fields, CLIENT_FIELD_REFS, null);
+          if (entry.client === "(No Client)" && itemClient) {
+            entry.client = itemClient;
+            entry.clientInheritedFrom = inheritedFrom;
           }
+        });
 
-          var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && parentClient) {
-            entry.client = parentClient;
-            entry.clientInheritedFrom = "parent";
-          }
-
-          if (parentItem.fields["System.WorkItemType"] === "Epic") {
-            entry.epicId = entry.parentId;
-            entry.epicTitle = entry.parentTitle;
-            if (entry.project === "(No Project)" && parentProject) {
-              entry.project = parentProject;
-              entry.projectInheritedFrom = "epic";
-            }
-            if (entry.client === "(No Client)" && parentClient) {
-              entry.client = parentClient;
-              entry.clientInheritedFrom = "epic";
-            }
-            return { parentItem: parentItem, grandparentItem: null };
-          }
-
-          if (parentItem.fields["System.Parent"]) {
-            return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4)
-              .then(function (grandparentItem) {
-                return { parentItem: parentItem, grandparentItem: grandparentItem };
-              });
-          }
-        }
-        return { parentItem: parentItem, grandparentItem: null };
-      }).then(function (result) {
-        var grandparentItem = result ? result.grandparentItem : null;
-
-        if (grandparentItem && grandparentItem.fields["System.WorkItemType"] === "Epic") {
-          entry.epicId = grandparentItem.id;
-          entry.epicTitle = grandparentItem.fields["System.Title"];
-
-          if (!entry.tags && grandparentItem.fields["System.Tags"]) {
-            entry.tags = grandparentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "epic";
-          }
-          var gpProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && gpProject) {
-            entry.project = gpProject;
-            entry.projectInheritedFrom = "epic";
-          }
-          var gpClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && gpClient) {
-            entry.client = gpClient;
-            entry.clientInheritedFrom = "epic";
-          }
-        }
         return entry;
       });
     });
+  }
+
+  // ---- Add / Edit entry modal (work item picker + time entry form) ---
+  // Single-screen design: the work item chip and the form fields are
+  // always visible together. Clicking the chip (or the search area)
+  // toggles the picker list open/closed.
+  //
+  // config: {
+  //   dataService     — ExtensionData service
+  //   witClientGetter — () => Promise<witClient>
+  //   currentUser     — { id, name, email }
+  //   projectName     — scopes the WIQL title search
+  //   recentItems     — [{ id, title, type }] shown before the user types
+  //   onSaved         — () called after a successful save
+  //   title           — modal heading (default "Log Time")
+  //   saveLabel       — save button label (default "Log Time")
+  //   initialItem     — { id, title, type } pre-selected work item
+  //   initialHours    — number
+  //   initialDate     — "YYYY-MM-DD"
+  //   initialDesc     — string
+  //   // Edit mode (update existing entry):
+  //   entryId         — id of the entry being edited
+  //   originalDate    — entry.date at load time (for storage key lookup)
+  // }
+  function openAddEntryModal(config) {
+    var old = document.getElementById('tcAddModal');
+    if (old) old.remove();
+
+    var today = localISODate(new Date());
+    var backdrop = document.createElement('div');
+    backdrop.id = 'tcAddModal';
+    backdrop.className = 'edit-modal-backdrop';
+    backdrop.style.display = 'flex';
+
+    var PENCIL_ICON =
+      '<svg class="tc-chip-pencil" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
+        ' stroke="currentColor" stroke-width="2.5">' +
+        '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>' +
+        '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>' +
+      '</svg>';
+
+    backdrop.innerHTML =
+      '<div class="edit-modal-content tc-add-modal">' +
+        '<div class="tc-add-header"><h3>' + escapeHtml(config.title || 'Log Time') + '</h3>' +
+          '<button class="tc-modal-close" id="tcAddClose" title="Close">&#x2715;</button></div>' +
+        // Work item area: chip (selected) XOR search (unselected)
+        '<button class="tc-selected-chip" id="tcSelectedChip" style="display:none"' +
+          ' title="Click to change work item">' +
+          '<span id="tcChipContent"></span>' +
+          PENCIL_ICON +
+        '</button>' +
+        '<div id="tcSearchWrap">' +
+          '<input type="text" id="tcSearchInput" class="tc-search-input"' +
+            ' placeholder="Search by title or work item #ID…" autocomplete="off">' +
+          '<div id="tcSearchStatus" class="tc-search-status"></div>' +
+          '<div id="tcItemList" class="tc-item-list"></div>' +
+        '</div>' +
+        // Form fields — always visible
+        '<div class="filter-group" style="margin-top:8px">' +
+          '<label for="tcHours">Hours Spent</label>' +
+          '<input type="number" id="tcHours" min="0.25" max="24" step="0.25" placeholder="e.g. 2.5"' +
+            ' onkeydown="return event.key!==\'e\'&&event.key!==\'E\'&&event.key!==\'+\'&&event.key!==\'-\'">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDate">Date</label>' +
+          '<input type="date" id="tcDate" value="' + today + '">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDesc">Description' +
+            ' <span style="font-weight:400;color:var(--text-secondary)">(required, max 100 chars)</span></label>' +
+          '<textarea id="tcDesc" rows="2" maxlength="100"' +
+            ' style="resize:vertical;width:100%;box-sizing:border-box;"></textarea>' +
+        '</div>' +
+        '<div id="tcFormMsg" class="message" style="display:none;margin:0;padding:6px 10px;font-size:13px;"></div>' +
+        '<div class="edit-modal-actions">' +
+          '<button id="tcSaveBtn">' + escapeHtml(config.saveLabel || 'Log Time') + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(backdrop);
+
+    var selectedItem = null;
+    var searchTimer  = null;
+
+    function close() { backdrop.remove(); document.removeEventListener('keydown', onEsc); }
+
+    // Show the search input + list, hide the chip
+    function openSearch() {
+      selectedItem = null;
+      document.getElementById('tcSelectedChip').style.display = 'none';
+      document.getElementById('tcSearchWrap').style.display = '';
+      document.getElementById('tcSearchInput').value = '';
+      document.getElementById('tcSearchStatus').textContent = '';
+      renderList(config.recentItems || [], 'Recently used');
+      setTimeout(function() { document.getElementById('tcSearchInput').focus(); }, 0);
+    }
+
+    // Hide search, show the selected-item chip
+    function selectItem(item) {
+      selectedItem = item;
+      document.getElementById('tcSearchWrap').style.display = 'none';
+      var chip = document.getElementById('tcSelectedChip');
+      chip.style.display = '';
+      document.getElementById('tcChipContent').innerHTML =
+        (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+        '<span class="wi-id">#' + item.id + '</span> ' +
+        '<span class="wi-title">' + escapeHtml(item.title) + '</span>';
+      document.getElementById('tcFormMsg').style.display = 'none';
+      setTimeout(function() { document.getElementById('tcHours').focus(); }, 0);
+    }
+
+    function renderList(items, groupLabel) {
+      var list = document.getElementById('tcItemList');
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="tc-item-empty">' +
+          escapeHtml(groupLabel || 'No items found') + '</div>';
+        return;
+      }
+      list.innerHTML =
+        (groupLabel ? '<div class="tc-item-group">' + escapeHtml(groupLabel) + '</div>' : '') +
+        items.map(function(item) {
+          return '<button class="tc-item-row">' +
+            (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+            '<span class="wi-id">#' + item.id + '</span> ' +
+            '<span class="wi-title tc-item-title">' + escapeHtml(item.title || '(untitled)') + '</span>' +
+          '</button>';
+        }).join('');
+      var cached = items;
+      Array.prototype.forEach.call(list.querySelectorAll('.tc-item-row'), function(btn, i) {
+        btn.addEventListener('click', function() { selectItem(cached[i]); });
+      });
+    }
+
+    function doSearch(raw) {
+      var q = (raw || '').trim();
+      var statusEl = document.getElementById('tcSearchStatus');
+      if (!q) {
+        statusEl.textContent = '';
+        renderList(config.recentItems || [], 'Recently used');
+        return;
+      }
+      // Pure number → direct work item ID lookup
+      if (/^\d+$/.test(q)) {
+        statusEl.textContent = 'Looking up #' + q + '…';
+        config.witClientGetter().then(function(c) {
+          return c.getWorkItem(parseInt(q, 10), null, null, 0);
+        }).then(function(wi) {
+          statusEl.textContent = '';
+          renderList([{
+            id: wi.id,
+            title: wi.fields['System.Title'],
+            type: wi.fields['System.WorkItemType']
+          }], null);
+        }).catch(function() {
+          statusEl.textContent = '';
+          renderList([], 'No work item found for #' + q);
+        });
+        return;
+      }
+      if (q.length < 2) {
+        statusEl.textContent = 'Type at least 2 characters…';
+        renderList([], '');
+        return;
+      }
+      statusEl.textContent = 'Searching…';
+      config.witClientGetter().then(function(c) {
+        var safe = q.replace(/'/g, "''");
+        var proj = config.projectName || '';
+        var wiql = { query:
+          'SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS \'' + safe + '\'' +
+          (proj ? ' AND [System.TeamProject] = \'' + proj.replace(/'/g, "''") + '\'' : '') +
+          ' AND [System.State] NOT IN (\'Closed\',\'Done\',\'Removed\',\'Resolved\',\'Completed\')' +
+          ' ORDER BY [System.ChangedDate] DESC'
+        };
+        return c.queryByWiql(wiql, proj ? { project: proj } : null, false, 20)
+          .then(function(res) {
+            var ids = (res.workItems || []).map(function(w) { return w.id; }).slice(0, 20);
+            if (!ids.length) return [];
+            return c.getWorkItems(ids, proj || null,
+              ['System.Id', 'System.Title', 'System.WorkItemType'], null, null, 2)
+              .then(function(rows) {
+                return (rows || []).map(function(wi) {
+                  return { id: wi.id, title: wi.fields['System.Title'], type: wi.fields['System.WorkItemType'] };
+                });
+              });
+          });
+      }).then(function(results) {
+        statusEl.textContent = '';
+        if (!results.length) {
+          document.getElementById('tcItemList').innerHTML =
+            '<div class="tc-item-empty">No results for &ldquo;' + escapeHtml(q) + '&rdquo;</div>';
+        } else {
+          renderList(results, null);
+        }
+      }).catch(function() {
+        statusEl.textContent = '';
+        renderList([], 'Search failed — check your connection');
+      });
+    }
+
+    function doSave() {
+      var hours = parseFloat(document.getElementById('tcHours').value);
+      var date  = document.getElementById('tcDate').value;
+      var desc  = document.getElementById('tcDesc').value.trim();
+      var msgEl = document.getElementById('tcFormMsg');
+      function showErr(msg) {
+        msgEl.textContent = msg;
+        msgEl.className = 'message error';
+        msgEl.style.display = '';
+      }
+      if (!selectedItem)                      { showErr('Select a work item first'); return; }
+      if (!hours || hours <= 0 || hours > 24) { showErr('Enter valid hours (0.25–24)'); return; }
+      if (!date)                              { showErr('Pick a date'); return; }
+      if (!desc)                              { showErr('Enter a description'); return; }
+
+      var saveBtn = document.getElementById('tcSaveBtn');
+      saveBtn.disabled = true;
+      msgEl.style.display = 'none';
+
+      var sameItem = config.entryId && config.initialItem && selectedItem.id === config.initialItem.id;
+      var p;
+      if (config.entryId && sameItem) {
+        p = config.witClientGetter().then(function(c) {
+          return updateEntry(config.dataService, config.entryId, config.originalDate,
+            { hours: hours, date: date, description: desc }, c);
+        });
+      } else if (config.entryId) {
+        p = config.witClientGetter().then(function(c) {
+          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc }).then(function(newEntry) {
+            return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
+              .then(function() { return saveEntry(config.dataService, newEntry, c); });
+          });
+        });
+      } else {
+        p = config.witClientGetter().then(function(c) {
+          return buildEntryForWorkItem(c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc }).then(function(entry) {
+            return saveEntry(config.dataService, entry, c);
+          });
+        });
+      }
+      p.then(function() {
+        close();
+        if (config.onSaved) config.onSaved();
+      }).catch(function(e) {
+        showErr('Error: ' + (e && e.message ? e.message : 'could not save'));
+        saveBtn.disabled = false;
+      });
+    }
+
+    document.getElementById('tcSearchInput').addEventListener('input', function(ev) {
+      clearTimeout(searchTimer);
+      var q = ev.target.value;
+      searchTimer = setTimeout(function() { doSearch(q); }, 300);
+    });
+    document.getElementById('tcSelectedChip').addEventListener('click', openSearch);
+    document.getElementById('tcSaveBtn').addEventListener('click', doSave);
+    document.getElementById('tcAddClose').addEventListener('click', close);
+    backdrop.addEventListener('click', function(ev) { if (ev.target === backdrop) close(); });
+    function onEsc(ev) { if (ev.key === 'Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+
+    // Pre-fill for edit mode, otherwise start with the search open
+    if (config.initialItem) {
+      selectItem(config.initialItem);
+      if (config.initialHours !== undefined) document.getElementById('tcHours').value = config.initialHours;
+      if (config.initialDate)               document.getElementById('tcDate').value  = config.initialDate;
+      if (config.initialDesc)               document.getElementById('tcDesc').value  = config.initialDesc;
+    } else {
+      openSearch();
+    }
   }
 
   global.TimeCore = {
@@ -265,8 +791,19 @@
     getEntriesForMonth: getEntriesForMonth,
     loadEntriesForMonths: loadEntriesForMonths,
     loadEntriesForKeys: loadEntriesForKeys,
+    checkIsAdmin: checkIsAdmin,
     saveEntry: saveEntry,
     deleteEntryById: deleteEntryById,
-    buildEntryForWorkItem: buildEntryForWorkItem
+    SETTINGS_KEY: SETTINGS_KEY,
+    getSettings: getSettings,
+    recalcTotalHours: recalcTotalHours,
+    mergeTags: mergeTags,
+    EDIT_ICON: EDIT_ICON,
+    DELETE_ICON: DELETE_ICON,
+    escapeHtml: escapeHtml,
+    updateEntry: updateEntry,
+    resolveAncestry: resolveAncestry,
+    buildEntryForWorkItem: buildEntryForWorkItem,
+    openAddEntryModal: openAddEntryModal
   };
 })(window);

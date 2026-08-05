@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Settings</title>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+
+  <h1>Settings</h1>
+  <p id="subtitle" class="subtitle">Configure weekly hour summary emails.</p>
+
+  <div id="checkingAdmin">Checking permissions&hellip;</div>
+
+  <div id="accessDenied">
+    <div class="error-box">
+      <strong>Access denied.</strong> This page is only available to Project Administrators.
+      Contact a project admin to configure notification settings.
+    </div>
+  </div>
+
+  <div id="mainContent">
+    <div class="info-box">
+      Users who have logged time appear automatically. You can also add users manually below.
+      The <strong>CC</strong> field accepts multiple addresses separated by commas (e.g. a manager's email).
+    </div>
+
+    <!-- Schedule -->
+    <div class="card">
+      <h2>Schedule</h2>
+      <div class="schedule-row">
+        <div class="schedule-group">
+          <label for="scheduleDay">Send on</label>
+          <select id="scheduleDay" onchange="updateUtcPreview()">
+            <option value="1">Monday</option>
+            <option value="2">Tuesday</option>
+            <option value="3">Wednesday</option>
+            <option value="4">Thursday</option>
+            <option value="5">Friday</option>
+            <option value="6">Saturday</option>
+            <option value="0">Sunday</option>
+          </select>
+        </div>
+        <div class="schedule-group">
+          <label for="scheduleTime">At (local time)</label>
+          <input type="time" id="scheduleTime" value="10:00" oninput="updateUtcPreview()">
+        </div>
+      </div>
+      <p id="utcPreview" class="note"></p>
+      <p class="note">
+        The pipeline runs hourly and checks this setting at runtime — no YAML edits needed.<br>
+        To <strong>test</strong>: run the pipeline manually and set <code>override_week_start</code> to any Monday (YYYY-MM-DD).
+      </p>
+    </div>
+
+    <!-- Total logged hours field -->
+    <div class="card">
+      <h2>Total Logged Hours Field</h2>
+      <div class="schedule-group" style="max-width:420px">
+        <label for="totalHoursField">Work item field</label>
+        <select id="totalHoursField">
+          <option value="">(disabled — no field)</option>
+        </select>
+      </div>
+      <p class="note">
+        When set, every time entry add, edit, or delete fully recomputes this field from
+        scratch on the logged work item — and cascades up to its parent and epic, however
+        many levels away, so an epic's field reflects its own hours plus every descendant's.
+        It's always an absolute recalculation (never an incremental add), so it self-heals
+        after concurrent edits and after a work item is re-parented to a different epic.
+        Leave blank to disable. The field must already exist on the relevant work item types.<br><br>
+        <strong>After setting this for the first time</strong>, go to Time Reports, widen the
+        date filter to cover your full history, and click <strong>Re-sync</strong> once — that
+        backfills every past month into the recalculation and brings existing totals up to date.
+      </p>
+      <div class="btn-row">
+        <button id="totalHoursSaveBtn" onclick="saveTotalHoursField()">Save</button>
+        <span id="totalHoursStatus" class="status"></span>
+      </div>
+    </div>
+
+    <!-- Users -->
+    <div class="card" id="usersCard">
+      <h2>User Notification Configuration</h2>
+      <div id="loadingMsg" class="loading-msg">Loading users&hellip;</div>
+      <div id="tableContainer" style="display:none">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name">Name</th>
+              <th class="col-email">Email</th>
+              <th class="col-send">Send Email</th>
+              <th class="col-target">Target h/w</th>
+              <th>CC &mdash; manager(s), comma-separated</th>
+            </tr>
+          </thead>
+          <tbody id="userTableBody"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty-state" style="display:none">
+        No users yet. Add one below or wait for someone to log their first hour.
+      </div>
+      <div class="add-user-row">
+        <div class="add-user-search-wrap">
+          <input type="text" id="addUserSearch" placeholder="Search ADO users to add&hellip;" autocomplete="off">
+          <div id="addUserResults" class="add-user-results" style="display:none"></div>
+        </div>
+        <span id="addUserMsg" class="status"></span>
+      </div>
+      <div class="btn-row">
+        <button id="saveBtn" onclick="saveConfig()" disabled>Save</button>
+        <span id="statusMsg" class="status"></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
+        return false;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      // On-premise Azure DevOps Server is same-origin — read the host page background
+      // as the ground truth for the active theme. Cross-origin throws; caught silently.
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
+    var CONFIG_KEY = 'notification-config';
+    var STORAGE_KEY_PREFIX = 'timetracker_';
+    var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    var knownUsers = {};  // userId -> { userId, userName, userEmail }
+    var savedConfig = {}; // userId -> { emailEnabled, cc }
+    var collectionBase = '';
+    var collectionProject = '';
+    var witClientCache = null;
+
+    function getWitClient() {
+      if (witClientCache) return Promise.resolve(witClientCache);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          witClientCache = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(witClientCache);
+        });
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // VSS init
+    // -------------------------------------------------------------------------
+
+    function initializeExtension() {
+      if (typeof VSS === 'undefined') { setTimeout(initializeExtension, 50); return; }
+      VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
+      applyDevOpsTheme();
+      VSS.ready(function() {
+        VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
+          window.dataService = dataService;
+          try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
+          VSS.notifyLoadSucceeded();
+          var ctx = VSS.getWebContext();
+          collectionBase    = ctx.collection.uri.replace(/\/$/, '');
+          collectionProject = ctx.project.name;
+          checkIsAdmin().then(function(isAdmin) {
+            document.getElementById('checkingAdmin').style.display = 'none';
+            if (!isAdmin) {
+              document.getElementById('accessDenied').style.display = 'block';
+              return;
+            }
+            document.getElementById('mainContent').style.display = 'flex';
+            loadData();
+            initTotalHoursField();
+          });
+        }, function(err) {
+          console.error('[NotifSettings] Failed to get ExtensionData:', err);
+          document.getElementById('checkingAdmin').textContent = 'Error: could not connect to Extension Data service.';
+        });
+      });
+    }
+
+    var checkIsAdmin = window.TimeCore.checkIsAdmin;
+
+    // -------------------------------------------------------------------------
+    // Data loading
+    // -------------------------------------------------------------------------
+
+    function getRecentMonthKeys() {
+      var keys = [];
+      var d = new Date();
+      for (var i = 0; i < 3; i++) {
+        var y = d.getFullYear();
+        var m = String(d.getMonth() + 1).padStart(2, '0');
+        keys.push(STORAGE_KEY_PREFIX + y + '_' + m);
+        d.setMonth(d.getMonth() - 1);
+      }
+      return keys;
+    }
+
+    function loadMonthEntries(keys, index, accumulated) {
+      if (index >= keys.length) return Promise.resolve(accumulated);
+      var key = keys[index];
+      console.log('[NotifSettings] Loading:', key);
+      return window.dataService.getValue(key, { scopeType: 'Default' }).then(
+        function(data) {
+          var merged = Array.isArray(data) ? accumulated.concat(data) : accumulated;
+          return loadMonthEntries(keys, index + 1, merged);
+        },
+        function() { return loadMonthEntries(keys, index + 1, accumulated); }
+      );
+    }
+
+    function loadData() {
+      var monthKeys = getRecentMonthKeys();
+      var rendered = false;
+      var safetyTimer = setTimeout(function() {
+        if (!rendered) { rendered = true; renderTable(); }
+      }, 10000);
+
+      loadMonthEntries(monthKeys, 0, []).then(function(allEntries) {
+        allEntries.forEach(function(e) {
+          if (e && e.userId && !knownUsers[e.userId]) {
+            knownUsers[e.userId] = { userId: e.userId, userName: e.userName || '', userEmail: e.userEmail || '' };
+          }
+        });
+        return window.dataService.getValue(CONFIG_KEY, { scopeType: 'Default' }).then(
+          function(cfg) {
+            if (!cfg) return;
+            ((cfg.users) || []).forEach(function(u) {
+              savedConfig[u.userId] = { emailEnabled: !!u.emailEnabled, cc: u.cc || '', targetHours: u.targetHours || 0 };
+              // Restore any user that was in a previous save (e.g. manually added, or outside the 3-month window)
+              if (u.userId && !knownUsers[u.userId]) {
+                knownUsers[u.userId] = { userId: u.userId, userName: u.userName || '', userEmail: u.userEmail || '' };
+              }
+            });
+            if (cfg.schedule) {
+              document.getElementById('scheduleDay').value  = cfg.schedule.day  !== undefined ? cfg.schedule.day  : 1;
+              document.getElementById('scheduleTime').value = cfg.schedule.time || '10:00';
+            }
+            updateUtcPreview();
+            updateSubtitle(cfg.schedule);
+          },
+          function() {} // no config yet, first run
+        );
+      }).then(function() {
+        if (!rendered) { rendered = true; clearTimeout(safetyTimer); renderTable(); }
+      }, function(err) {
+        if (!rendered) {
+          rendered = true; clearTimeout(safetyTimer);
+          document.getElementById('loadingMsg').textContent = 'Error loading data: ' + (err.message || err);
+        }
+      });
+    }
+
+    function updateSubtitle(schedule) {
+      var day  = schedule && schedule.day  !== undefined ? schedule.day  : 1;
+      var time = schedule && schedule.time ? schedule.time : '10:00';
+      var dayName = DAY_NAMES[day] || 'Monday';
+      document.getElementById('subtitle').textContent =
+        'Configure weekly hour summary emails — sent every ' + dayName + ' at ' + time + ' (local).';
+    }
+
+    // Compute UTC day+hour from the currently selected local day/time and update the preview label.
+    function updateUtcPreview() {
+      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
+      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
+      var localHour = parseInt(timeParts[0], 10) || 0;
+      var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
+
+      // Build a date that falls on the chosen local weekday
+      var d = new Date();
+      var daysUntil = (localDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + daysUntil);
+      d.setHours(localHour, localMin, 0, 0);
+
+      var utcDay  = d.getUTCDay();
+      var utcHour = d.getUTCHours();
+      var utcMin  = d.getUTCMinutes();
+
+      document.getElementById('utcPreview').textContent =
+        'Pipeline will send at: ' + DAY_NAMES[utcDay] + ' ' +
+        String(utcHour).padStart(2, '0') + ':' + String(utcMin).padStart(2, '0') + ' UTC';
+    }
+
+    function computeUtcSchedule() {
+      var localDay  = parseInt(document.getElementById('scheduleDay').value, 10);
+      var timeParts = (document.getElementById('scheduleTime').value || '10:00').split(':');
+      var localHour = parseInt(timeParts[0], 10) || 0;
+      var localMin  = parseInt(timeParts[1] || '0', 10) || 0;
+      var d = new Date();
+      var daysUntil = (localDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + daysUntil);
+      d.setHours(localHour, localMin, 0, 0);
+      return { utcDay: d.getUTCDay(), utcHour: d.getUTCHours() };
+    }
+
+    // -------------------------------------------------------------------------
+    // Render
+    // -------------------------------------------------------------------------
+
+    function renderTable() {
+      document.getElementById('loadingMsg').style.display = 'none';
+      var users = Object.keys(knownUsers).map(function(k) { return knownUsers[k]; });
+      users.sort(function(a, b) { return (a.userName || '').localeCompare(b.userName || ''); });
+
+      var emptyState     = document.getElementById('emptyState');
+      var tableContainer = document.getElementById('tableContainer');
+
+      if (users.length === 0) {
+        emptyState.style.display = 'block';
+        tableContainer.style.display = 'none';
+        document.getElementById('saveBtn').disabled = false;
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      var tbody = document.getElementById('userTableBody');
+      tbody.innerHTML = '';
+      users.forEach(function(u) {
+        var cfg = savedConfig[u.userId] || { emailEnabled: false, cc: '' };
+        var uid = escHtml(u.userId);
+        var tr  = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + escHtml(u.userName) + '</td>' +
+          '<td class="text-muted">' + escHtml(u.userEmail) + '</td>' +
+          '<td class="toggle-cell"><input type="checkbox" id="chk_' + uid + '"' + (cfg.emailEnabled ? ' checked' : '') + '></td>' +
+          '<td class="target-cell"><input type="number" id="tgt_' + uid + '" value="' + (cfg.targetHours || '') + '" min="0" max="80" step="0.5" placeholder="—"></td>' +
+          '<td><input type="text" id="cc_' + uid + '" value="' + escHtml(cfg.cc) + '" placeholder="manager@company.com"></td>';
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('tableContainer').style.display = 'block';
+      document.getElementById('saveBtn').disabled = false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Save
+    // -------------------------------------------------------------------------
+
+    function saveConfig() {
+      var btn    = document.getElementById('saveBtn');
+      var status = document.getElementById('statusMsg');
+      btn.disabled = true;
+      status.className = 'status';
+      status.textContent = 'Saving…';
+
+      var users = Object.keys(knownUsers).map(function(k) {
+        var u = knownUsers[k];
+        var tgtEl = document.getElementById('tgt_' + u.userId);
+        var tgt   = tgtEl ? parseFloat(tgtEl.value) : NaN;
+        return {
+          userId:       u.userId,
+          userName:     u.userName,
+          userEmail:    u.userEmail,
+          emailEnabled: !!(document.getElementById('chk_' + u.userId) || {}).checked,
+          targetHours:  isNaN(tgt) ? 0 : tgt,
+          cc:           ((document.getElementById('cc_' + u.userId) || {}).value || '').trim()
+        };
+      });
+
+      var utc = computeUtcSchedule();
+      var schedule = {
+        day:     parseInt(document.getElementById('scheduleDay').value, 10),
+        time:    document.getElementById('scheduleTime').value,
+        utcDay:  utc.utcDay,
+        utcHour: utc.utcHour
+      };
+
+      window.dataService.setValue(CONFIG_KEY, { users: users, schedule: schedule }, { scopeType: 'Default' })
+        .then(function() {
+          updateSubtitle(schedule);
+          status.className = 'status success';
+          status.textContent = 'Saved successfully.';
+          btn.disabled = false;
+        }, function(err) {
+          status.className = 'status error';
+          status.textContent = 'Error: ' + (err.message || String(err));
+          btn.disabled = false;
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Total logged hours field
+    // -------------------------------------------------------------------------
+
+    // The classic TFS/WorkItemTracking/RestClient SDK returns a field's
+    // `type` as this numeric enum (not the string name the raw REST JSON
+    // uses, e.g. "integer") — confirmed live: "Hours spend" comes back as
+    // type 1, matching Integer here.
+    var FIELD_TYPE = {
+      STRING: 0, INTEGER: 1, DATE_TIME: 2, PLAIN_TEXT: 3, HTML: 4,
+      TREE_PATH: 5, HISTORY: 6, DOUBLE: 7, GUID: 8, BOOLEAN: 9,
+      IDENTITY: 10, PICKLIST_STRING: 11, PICKLIST_INTEGER: 12, PICKLIST_DOUBLE: 13
+    };
+    var FIELD_TYPE_LABELS = {};
+    FIELD_TYPE_LABELS[FIELD_TYPE.STRING] = 'Text';
+    FIELD_TYPE_LABELS[FIELD_TYPE.INTEGER] = 'Integer';
+    FIELD_TYPE_LABELS[FIELD_TYPE.DATE_TIME] = 'DateTime';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PLAIN_TEXT] = 'PlainText';
+    FIELD_TYPE_LABELS[FIELD_TYPE.HTML] = 'Html';
+    FIELD_TYPE_LABELS[FIELD_TYPE.TREE_PATH] = 'TreePath';
+    FIELD_TYPE_LABELS[FIELD_TYPE.HISTORY] = 'History';
+    FIELD_TYPE_LABELS[FIELD_TYPE.DOUBLE] = 'Double';
+    FIELD_TYPE_LABELS[FIELD_TYPE.GUID] = 'Guid';
+    FIELD_TYPE_LABELS[FIELD_TYPE.BOOLEAN] = 'Boolean';
+    FIELD_TYPE_LABELS[FIELD_TYPE.IDENTITY] = 'Identity';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_STRING] = 'PicklistString';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_INTEGER] = 'PicklistInteger';
+    FIELD_TYPE_LABELS[FIELD_TYPE.PICKLIST_DOUBLE] = 'PicklistDouble';
+
+    function fieldTypeLabel(type) {
+      return FIELD_TYPE_LABELS[type] || ('type ' + type);
+    }
+
+    // Fields that make sense as an hours total. Integer/Double are the "real"
+    // numeric types; Text/PlainText are included too because Azure DevOps
+    // happily stores a written number in a text field (many custom fields
+    // default to Text unless someone explicitly changes it) — it just loses
+    // native numeric sort/rollup, which is a tradeoff, not a hard blocker.
+    var TOTAL_HOURS_FIELD_TYPES = {};
+    [FIELD_TYPE.INTEGER, FIELD_TYPE.DOUBLE, FIELD_TYPE.STRING, FIELD_TYPE.PLAIN_TEXT].forEach(function(t) {
+      TOTAL_HOURS_FIELD_TYPES[t] = true;
+    });
+
+    // The REST client is expected to return a plain array, but normalize
+    // defensively in case this SDK/server combination hands back the raw
+    // {count, value} envelope instead of unwrapping it.
+    function normalizeFieldsResult(res) {
+      if (Array.isArray(res)) return res;
+      if (res && Array.isArray(res.value)) return res.value;
+      return [];
+    }
+
+    function initTotalHoursField() {
+      var select = document.getElementById('totalHoursField');
+      Promise.all([
+        getWitClient().then(function(c) { return c.getFields(); }).then(normalizeFieldsResult, function(err) {
+          console.warn('[Settings] getFields() failed:', err);
+          return [];
+        }),
+        window.TimeCore.getSettings(window.dataService)
+      ]).then(function(results) {
+        var fields = results[0] || [];
+        var currentValue = (results[1] || {}).totalHoursField || '';
+        console.log('[Settings] getFields() returned', fields.length, 'fields; looking for', currentValue,
+          '; match:', fields.find(function(f) { return f.referenceName === currentValue; }));
+
+        var candidates = fields.filter(function(f) {
+          return TOTAL_HOURS_FIELD_TYPES[f.type];
+        }).sort(function(a, b) {
+          return (a.name || '').localeCompare(b.name || '');
+        });
+        console.log('[Settings]', candidates.length, 'candidates after type filter');
+
+        var html = '<option value="">(disabled — no field)</option>';
+        var found = !currentValue;
+        candidates.forEach(function(f) {
+          var isSelected = f.referenceName === currentValue;
+          if (isSelected) found = true;
+          html += '<option value="' + escHtml(f.referenceName) + '"' + (isSelected ? ' selected' : '') + '>' +
+            escHtml(f.name) + ' (' + escHtml(fieldTypeLabel(f.type)) + ') — ' + escHtml(f.referenceName) + '</option>';
+        });
+        // Keep an existing saved value selectable even if it didn't come back
+        // in this field list (e.g. the fields call failed, or it's a type we
+        // don't normally offer) — never silently drop a working configuration.
+        if (currentValue && !found) {
+          html += '<option value="' + escHtml(currentValue) + '" selected>' +
+            escHtml(currentValue) + ' (not found in field list)</option>';
+        }
+        select.innerHTML = html;
+      }).catch(function(err) {
+        console.error('[Settings] initTotalHoursField failed:', err);
+        select.innerHTML = '<option value="">(could not load fields — see console)</option>';
+      });
+    }
+
+    function persistTotalHoursField(value) {
+      return window.dataService.getValue(window.TimeCore.SETTINGS_KEY, { scopeType: 'Default' }).then(function(current) {
+        var merged = Object.assign({}, current || {}, { totalHoursField: value });
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, merged, { scopeType: 'Default' });
+      }, function() {
+        return window.dataService.setValue(window.TimeCore.SETTINGS_KEY, { totalHoursField: value }, { scopeType: 'Default' });
+      });
+    }
+
+    function saveTotalHoursField() {
+      var btn    = document.getElementById('totalHoursSaveBtn');
+      var status = document.getElementById('totalHoursStatus');
+      var value  = document.getElementById('totalHoursField').value.trim();
+      btn.disabled = true;
+      status.className = 'status';
+
+      function finishError(msg) {
+        status.className = 'status error';
+        status.textContent = msg;
+        btn.disabled = false;
+      }
+
+      if (!value) {
+        status.textContent = 'Saving…';
+        persistTotalHoursField(value).then(function() {
+          status.className = 'status success';
+          status.textContent = 'Saved — total-hours tracking disabled.';
+          btn.disabled = false;
+        }, function(err) {
+          finishError('Error: ' + (err.message || String(err)));
+        });
+        return;
+      }
+
+      status.textContent = 'Checking field exists…';
+      getWitClient().then(function(witClient) {
+        return witClient.getField(value);
+      }).then(function(field) {
+        status.textContent = 'Saving…';
+        return persistTotalHoursField(value).then(function() {
+          status.className = 'status success';
+          status.textContent = 'Saved — field found: "' + (field.name || value) + '" (' + fieldTypeLabel(field.type) + ').';
+          btn.disabled = false;
+        }, function(err) {
+          finishError('Error: ' + (err.message || String(err)));
+        });
+      }, function() {
+        finishError('Field "' + value + '" was not found in this organization — check the reference name (Process admin, or GET .../_apis/wit/fields).');
+      });
+    }
+
+    var addUserSearchTimer = null;
+
+    function onAddUserInput() {
+      var q   = (document.getElementById('addUserSearch').value || '').trim();
+      var msg = document.getElementById('addUserMsg');
+      var res = document.getElementById('addUserResults');
+      msg.textContent = '';
+      clearTimeout(addUserSearchTimer);
+      if (q.length < 2) { res.style.display = 'none'; res.innerHTML = ''; return; }
+      addUserSearchTimer = setTimeout(function() { searchADOUsers(q); }, 300);
+    }
+
+    function searchADOUsers(q) {
+      var res = document.getElementById('addUserResults');
+      res.innerHTML = '<div class="add-user-result-row muted">Searching…</div>';
+      res.style.display = 'block';
+
+      // IdentityPicker is what ADO uses internally for the Assigned-To picker.
+      // Works on both ADO Server on-prem and ADO cloud.
+      var url = collectionBase + '/_apis/IdentityPicker/Identities?api-version=5.1-preview.1';
+      fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: q,
+          identityTypes: ['user'],
+          operationScopes: ['ims'],
+          queryTypeHint: 'General',
+          properties: ['DisplayName', 'Mail', 'SignInAddress', 'SamAccountName']
+        })
+      })
+      .then(function(r) { return r.ok ? r.json() : Promise.reject('HTTP ' + r.status); })
+      .then(function(data) {
+        var identities = [];
+        (data.results || []).forEach(function(r) {
+          (r.identities || []).forEach(function(i) { identities.push(i); });
+        });
+
+        var items = identities.filter(function(i) {
+          if (i.entityType !== 'User') return false;
+          var id    = i.localId || i.entityId;
+          var email = (i.mail || i.signInAddress || '').toLowerCase();
+          if (knownUsers[id]) return false;
+          if (email && Object.keys(knownUsers).some(function(k) {
+            return (knownUsers[k].userEmail || '').toLowerCase() === email;
+          })) return false;
+          return true;
+        });
+
+        if (!items.length) {
+          res.innerHTML = '<div class="add-user-result-row muted">No users found.</div>';
+          return;
+        }
+        res.innerHTML = '';
+        items.forEach(function(identity) {
+          var name  = identity.displayName || identity.samAccountName || '';
+          var email = identity.mail || identity.signInAddress || '';
+          var row   = document.createElement('div');
+          row.className = 'add-user-result-row';
+          row.innerHTML = '<strong>' + escHtml(name) + '</strong>' +
+            (email ? ' <span class="muted">' + escHtml(email) + '</span>' : '');
+          row.addEventListener('click', function() { pickADOUser(identity); });
+          res.appendChild(row);
+        });
+      })
+      .catch(function(err) {
+        console.warn('[NotifSettings] User search failed:', err);
+        res.innerHTML = '<div class="add-user-result-row muted">Search failed.</div>';
+      });
+    }
+
+    function pickADOUser(identity) {
+      var msg   = document.getElementById('addUserMsg');
+      var res   = document.getElementById('addUserResults');
+      var id    = identity.localId || identity.entityId;
+      var name  = identity.displayName || identity.samAccountName || '';
+      var email = identity.mail || identity.signInAddress || '';
+
+      knownUsers[id] = { userId: id, userName: name, userEmail: email };
+
+      document.getElementById('addUserSearch').value = '';
+      res.style.display = 'none';
+      res.innerHTML = '';
+      msg.className = 'status success';
+      msg.textContent = name + ' added — save to persist.';
+
+      renderTable();
+    }
+
+    function escHtml(str) {
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    initializeExtension();
+    updateUtcPreview(); // show default preview before VSS loads
+    document.getElementById('addUserSearch').addEventListener('input', onAddUserInput);
+    document.addEventListener('click', function(e) {
+      // Close results when clicking outside the search
+      if (!e.target.closest('.add-user-search-wrap')) {
+        var res = document.getElementById('addUserResults');
+        res.style.display = 'none';
+      }
+    });
+  </script>
+
+</body>
+</html>

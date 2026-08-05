@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
   "id": "timetracker-extension-dev",
-  "version": "1.5.5",
+  "version": "1.5.33",
   "name": "Time Tracker (DEV)",
   "description": "[DEVELOPMENT] Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
@@ -78,14 +78,14 @@
       }
     },
     {
-      "id": "notification-settings-hub",
+      "id": "settings-hub",
       "type": "ms.vss-web.hub",
       "targets": [
         "ms.vss-work-web.work-hub-group"
       ],
       "properties": {
-        "name": "Notification Settings (DEV)",
-        "uri": "src/notification-settings.html",
+        "name": "Settings (DEV)",
+        "uri": "src/settings.html",
         "icon": "static/icon.png",
         "order": 30
       }
@@ -114,6 +114,7 @@
   "scopes": [
     "vso.work",
     "vso.work_write",
-    "vso.extension.data_write"
+    "vso.extension.data_write",
+    "vso.identity"
   ]
 }
