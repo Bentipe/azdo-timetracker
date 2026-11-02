@@ -217,6 +217,11 @@ jobs:
               return days;
             }
 
+            function mondayOf(dateStr) {
+              const d = new Date(dateStr + 'T00:00:00');
+              return toDateStr(addDays(d, -((d.getDay() + 6) % 7)));
+            }
+
             /**
              * Hours a user is expected to log on a date. Their own Mon–Fri schedule wins
              * (e.g. [8, 8, 4, 8, 8]); otherwise the weekly target is spread evenly over
@@ -853,9 +858,15 @@ jobs:
                 });
                 console.log(`Daily reminder: checking ${checkDays.join(', ') || 'no days'}.`);
                 for (const user of enabledUsers) {
-                  const shortDays = checkDays
-                    .map(dateStr => ({ date: dateStr, hours: (logged[dateStr] || {})[user.userId] || 0, expected: dailyExpectation(user, dateStr) }))
-                    .filter(s => isShortDay(user, s.date, s.hours));
+                  const days = checkDays.map(dateStr => ({ date: dateStr, hours: (logged[dateStr] || {})[user.userId] || 0, expected: dailyExpectation(user, dateStr) }));
+                  // Extra hours on one day make up for a short day in the same week (7 + 9 = 16):
+                  // a week whose checked days add up to what's expected gets no reminder.
+                  const balance = {}; // week's Monday -> logged minus expected over its checked days
+                  days.filter(s => s.expected !== null).forEach(s => {
+                    const w = mondayOf(s.date);
+                    balance[w] = (balance[w] || 0) + s.hours - s.expected;
+                  });
+                  const shortDays = days.filter(s => isShortDay(user, s.date, s.hours) && !(balance[mondayOf(s.date)] >= -0.001));
                   if (!shortDays.length) continue;
                   console.log(`Daily reminder: ${user.userName} — ` + shortDays.map(s => `${s.date} ${s.hours.toFixed(1)} h` +
                               (s.expected !== null ? ` (expected ${+s.expected.toFixed(1)})` : '')).join(', '));

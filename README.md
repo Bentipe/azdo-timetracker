@@ -70,6 +70,7 @@ Each weekday morning, emails everyone whose previous working day came out short 
 
 - A day is short when it has fewer hours than the user's **Hours Mon–Fri** (e.g. `8 8 4 8 8` for a 36-hour week with a short Wednesday), else their weekly target ÷ 5, else when it has no hours at all
 - **Check the last (working days)** sets how far back it looks (default 1). With e.g. 5, one mail lists every short day of the past five working days, so a missed reminder or a day still left open keeps coming back until it's filled in
+- Extra hours on another day of the same week make up for a short day: 7 + 9 hours, or 4 + 10 + 10 by Wednesday, sends no reminder, because the checked days of that week add up to what's expected
 - A day on which nobody logged anything (public holiday) is skipped
 - Days past the edit window are still listed — the user can't fix those themselves and should ask someone who can
 - Always sent with **high importance**
