@@ -97,6 +97,24 @@
           Covers everyone with <strong>Send Email</strong> ticked below. Send it a day after the weekly summary,
           so people get a day to fix their hours first. Saved with the <strong>Save</strong> button below.
         </p>
+        <label class="check-row">
+          <input type="checkbox" id="followUpEnabled">
+          With the digest, send a firm follow-up to everyone below their target last week
+        </label>
+        <div class="schedule-row">
+          <div class="schedule-group field-group">
+            <label for="followUpAddress">Reply-To and BCC</label>
+            <input type="text" id="followUpAddress" placeholder="manager@company.com">
+          </div>
+          <div class="schedule-group field-group">
+            <label for="followUpSignature">Signature</label>
+            <textarea id="followUpSignature" rows="3" placeholder="Kind regards,&#10;Your name"></textarea>
+          </div>
+        </div>
+        <p class="note">
+          Always sent when the week is short, since planned holidays are logged ahead. The mail says gaps are only
+          excusable for sickness or holiday and ends with your signature; replies and a blind copy go to this address. Needs the digest enabled.
+        </p>
       </div>
 
       <!-- Daily reminder -->
@@ -394,6 +412,9 @@
               document.getElementById('digestDay').value        = cfg.managerDigest.day !== undefined ? cfg.managerDigest.day : 2;
               document.getElementById('digestTime').value       = cfg.managerDigest.time || '07:00';
               document.getElementById('digestRecipients').value = cfg.managerDigest.recipients || '';
+              document.getElementById('followUpEnabled').checked = !!cfg.managerDigest.followUp;
+              document.getElementById('followUpAddress').value   = cfg.managerDigest.followUpAddress || '';
+              document.getElementById('followUpSignature').value = cfg.managerDigest.followUpSignature || '';
             }
             if (cfg.dailyReminder) {
               document.getElementById('dailyEnabled').checked = !!cfg.dailyReminder.enabled;
@@ -579,7 +600,10 @@
         day:        parseInt(document.getElementById('digestDay').value, 10),
         time:       document.getElementById('digestTime').value,
         utcDay:     digestUtc.utcDay,
-        utcHour:    digestUtc.utcHour
+        utcHour:    digestUtc.utcHour,
+        followUp:        document.getElementById('followUpEnabled').checked,
+        followUpAddress: document.getElementById('followUpAddress').value.trim(),
+        followUpSignature: document.getElementById('followUpSignature').value.trim()
       };
 
       var dailyUtc = computeUtcDays(WEEKDAYS, document.getElementById('dailyTime').value);

@@ -62,6 +62,7 @@ One email to the managers with the whole team on a single page: last week's hour
 
 - Sent by the same pipeline as the weekly summary, on its own day and time (default **Tuesday 07:00**, one day after the personal mails, so people get a day to fix their hours first)
 - Covers everyone with **Send Email** ticked; worst first, so the people to talk to are at the top
+- Optional **firm follow-up**: in the same run, everyone below their target last week gets a personal high-importance mail ("you logged 19.0 of 40 hours… only excusable when sick or on holiday… please fix your hours today"), including the days with nothing logged and how many of the last 4 weeks came out short. It's always sent when a week is short (planned holidays are logged ahead). It still comes from `SMTP_FROM`, so delivery is unchanged; **Reply-To** and a **BCC** go to one configurable address, so replies reach the manager and they see who got one. The mail ends with the manager's own **Signature**, set in the same place
 
 ### Daily Reminder (email)
 

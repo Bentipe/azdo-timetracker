@@ -7,9 +7,11 @@
  * Data REST API, then sends one HTML email per enabled user via SMTP.
  * When the manager digest is enabled it also sends one team overview (last
  * week per person + a 4-week trend) to the configured managers, on its own
- * day/time. And each weekday morning (when enabled) it reminds everyone whose
- * last few working days (lookbackDays, default 1) came out short. All
- * schedules live in Notification Settings.
+ * day/time, plus (optionally) a firm follow-up to everyone below target that
+ * week, with Reply-To + BCC to one configured address. And each weekday
+ * morning (when enabled) it reminds everyone whose last few working days
+ * (lookbackDays, default 1) came out short. All schedules live in
+ * Notification Settings.
  *
  * Required environment variables:
  *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
@@ -454,6 +456,54 @@ function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
 </html>`;
 }
 
+/**
+ * The firm follow-up a person gets alongside the digest when last week came
+ * out below their target. Only facts from the digest row, so it can't be argued with.
+ */
+function buildFollowUpHtml(row, weeks, signature) {
+  const lastIdx   = weeks.length - 1;
+  const target    = row.user.targetHours;
+  const total     = row.totals[lastIdx];
+  const firstName = String(row.user.userName || '').trim().split(/\s+/)[0] || 'there';
+  const shortWeeks = row.totals.filter(t => t < target).length;
+  const missing   = row.missing.length
+    ? ` Nothing at all was logged on <strong>${row.missing.join(', ')}</strong>.`
+    : '';
+  const repeat    = shortWeeks > 1
+    ? `<p style="margin:0 0 16px 0">This is the <strong>${shortWeeks}${['', 'st', 'nd', 'rd'][shortWeeks] || 'th'} week out of the last ${weeks.length}</strong> that came out short.</p>`
+    : '';
+  const link = TIMETRACKER_URL
+    ? `<p style="margin:0 0 20px 0"><a href="${escHtml(TIMETRACKER_URL)}" style="color:#0078d4">Open Time Tracker</a></p>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+  <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 16px 0">Hello ${escHtml(firstName)},</p>
+      <p style="margin:0 0 16px 0">
+        Last week (week ${isoWeek(weeks[lastIdx].monday)}, ${weeks[lastIdx].start} &ndash; ${weeks[lastIdx].end}) you logged
+        <strong>${total.toFixed(1)} of ${target} hours (${Math.round((total / target) * 100)}%)</strong> in Time Tracker.${missing}
+      </p>
+      ${repeat}
+      <p style="margin:0 0 16px 0">
+        You have already been reminded to log your hours, and they are still incomplete.
+        <strong>Please fix your hours today.</strong>
+      </p>
+      <p style="margin:0 0 20px 0">
+        Missing hours are only excusable when you were sick or on holiday. If that is the case, you can ignore
+        this email, but please consider it a gentle reminder to fix your hours anyway.
+      </p>
+      ${link}
+      ${signature ? `<p style="margin:0">${escHtml(signature).replace(/\r?\n/g, '<br>')}</p>` : ''}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 // ---------------------------------------------------------------------------
 // Daily reminder
 // ---------------------------------------------------------------------------
@@ -676,6 +726,28 @@ async function main() {
         html:    buildDigestHtml(rows, weeks, editCutoff, editWindowDays),
       }
     });
+
+    // Firm follow-up to everyone below target last week. Always sent when short:
+    // planned holidays are logged ahead, so a gap means sick leave or missing hours.
+    if (digestCfg.followUp) {
+      const lastIdx  = weeks.length - 1;
+      const followTo = (digestCfg.followUpAddress || '').trim();
+      for (const r of rows.filter(r => r.user.targetHours > 0 && r.totals[lastIdx] < r.user.targetHours)) {
+        console.log(`Follow-up: ${r.user.userName} — ${r.totals[lastIdx].toFixed(1)} of ${r.user.targetHours} h`);
+        mails.push({
+          total: r.totals[lastIdx],
+          mailOptions: {
+            from:     SMTP_FROM,
+            to:       r.user.userEmail,
+            bcc:      followTo || undefined,
+            replyTo:  followTo || undefined,
+            subject:  `Action required: your hours for week ${isoWeek(weeks[lastIdx].monday)} are incomplete`,
+            html:     buildFollowUpHtml(r, weeks, (digestCfg.followUpSignature || '').trim()),
+            priority: 'high',
+          }
+        });
+      }
+    }
   }
 
   if (sendDaily) {
@@ -717,7 +789,7 @@ async function main() {
 
   if (DRY_RUN) {
     for (const { total, mailOptions } of mails) {
-      console.log(`[DRY RUN] → ${mailOptions.to}${mailOptions.cc ? '  CC: ' + mailOptions.cc : ''}  |  Total: ${total.toFixed(1)} h`);
+      console.log(`[DRY RUN] → ${mailOptions.to}${mailOptions.cc ? '  CC: ' + mailOptions.cc : ''}${mailOptions.bcc ? '  BCC: ' + mailOptions.bcc : ''}  |  Total: ${total.toFixed(1)} h`);
     }
     console.log(`Done (dry run). Would send: ${mails.length}.`);
     return;
@@ -737,7 +809,7 @@ async function main() {
     for (const item of pending) {
       try {
         await transporter.sendMail(item.mailOptions);
-        console.log(`Sent  → ${item.mailOptions.to}${item.mailOptions.cc ? '  CC: ' + item.mailOptions.cc : ''}`);
+        console.log(`Sent  → ${item.mailOptions.to}${item.mailOptions.cc ? '  CC: ' + item.mailOptions.cc : ''}${item.mailOptions.bcc ? '  BCC: ' + item.mailOptions.bcc : ''}`);
         sent++;
       } catch (err) {
         console.warn(`Round ${round} failed → ${item.mailOptions.to}: ${err.message}`);
