@@ -6,9 +6,9 @@
  * Reads notification config and time entries from the Azure DevOps Extension
  * Data REST API, then sends one HTML email per enabled user via SMTP.
  * When the manager digest is enabled it also sends one team overview (last
- * week per person + a 4-week trend) to the configured managers, on its own
- * day/time, plus (optionally) a firm follow-up to everyone below target that
- * week, with Reply-To + BCC to one configured address. And each weekday
+ * week per person + a trend over the daily reminder's look-back, 4 to 8 weeks) to the configured managers, on its own
+ * day/time, plus (optionally) a firm follow-up to everyone with a short week
+ * in the daily reminder's look-back, with Reply-To + BCC to one configured address. And each weekday
  * morning (when enabled) it reminds everyone whose last few working days
  * (lookbackDays, default 1) came out short. All schedules live in
  * Notification Settings.
@@ -58,6 +58,7 @@ const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY
 const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
 const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
 const TREND_WEEKS         = 4;
+const DIGEST_MAX_WEEKS    = 8; // more week columns don't fit the digest's 760px layout
 
 const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
 
@@ -342,11 +343,11 @@ function escHtml(str) {
 // ---------------------------------------------------------------------------
 
 /**
- * The TREND_WEEKS Monday–Sunday weeks ending with `lastWeekStart`'s week, oldest first.
+ * The `count` (default TREND_WEEKS) Monday–Sunday weeks ending with `lastWeekStart`'s week, oldest first.
  */
-function getTrendWeeks(lastWeekStart) {
+function getTrendWeeks(lastWeekStart, count = TREND_WEEKS) {
   const weeks = [];
-  for (let i = TREND_WEEKS - 1; i >= 0; i--) {
+  for (let i = count - 1; i >= 0; i--) {
     const monday = addDays(lastWeekStart, -7 * i);
     weeks.push({ monday, start: toDateStr(monday), end: toDateStr(addDays(monday, 6)) });
   }
@@ -387,8 +388,8 @@ function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
   const weekHeaders = weeks.map((w, i) => {
     const locked = editCutoff && w.end < editCutoff;
     const label  = w.monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    return `<th style="${th};text-align:right;${i === lastIdx ? 'background:#e1effa;' : ''}">` +
-           `Wk ${isoWeek(w.monday)}<br><span style="font-weight:400;font-size:11px">${label}${locked ? ' &middot; final' : ''}</span></th>`;
+    return `<th style="${th};text-align:right;white-space:nowrap;${i === lastIdx ? 'background:#e1effa;' : ''}">` +
+           `Wk ${isoWeek(w.monday)}<br><span style="font-weight:400;font-size:11px">${label}${locked ? '<br>final' : ''}</span></th>`;
   }).join('');
 
   const body = rows.map(r => {
@@ -408,7 +409,7 @@ function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
       : `<span style="color:#107c10">&mdash;</span>`;
     return `
       <tr>
-        <td style="${td}">${escHtml(r.user.userName)}</td>
+        <td style="${td};white-space:nowrap">${escHtml(r.user.userName)}</td>
         <td style="${td};text-align:right;color:#605e5c">${target || '&mdash;'}</td>
         ${cells}
         <td style="${td}">${missing}</td>
@@ -462,18 +463,30 @@ function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
 }
 
 /**
- * The firm follow-up a person gets alongside the digest when last week came
- * out below their target. Only facts from the digest row, so it can't be argued with.
+ * The firm follow-up a person gets alongside the digest when weeks within the
+ * look-back (`openShort`, indexes into `weeks`) came out below their target.
+ * Only facts from the digest row, so it can't be argued with.
  */
-function buildFollowUpHtml(row, weeks, signature) {
+function buildFollowUpHtml(row, weeks, openShort, signature) {
   const lastIdx   = weeks.length - 1;
   const target    = row.user.targetHours;
-  const total     = row.totals[lastIdx];
   const firstName = String(row.user.userName || '').trim().split(/\s+/)[0] || 'there';
   const shortWeeks = row.totals.filter(t => t < target).length;
-  const missing   = row.missing.length
+  // row.missing only covers last week
+  const missing   = i => i === lastIdx && row.missing.length
     ? ` Nothing at all was logged on <strong>${row.missing.join(', ')}</strong>.`
     : '';
+  const range  = i => `${weeks[i].start} &ndash; ${weeks[i].end}`;
+  const logged = i => `<strong>${row.totals[i].toFixed(1)} of ${target} hours (${Math.round((row.totals[i] / target) * 100)}%)</strong>`;
+  const weeksText = openShort.length === 1
+    ? `<p style="margin:0 0 16px 0">
+        ${openShort[0] === lastIdx ? `Last week (week ${isoWeek(weeks[lastIdx].monday)}, ${range(lastIdx)})` : `In week ${isoWeek(weeks[openShort[0]].monday)} (${range(openShort[0])})`} you logged
+        ${logged(openShort[0])} in Time Tracker.${missing(openShort[0])}
+      </p>`
+    : `<p style="margin:0 0 8px 0">These weeks are still incomplete in Time Tracker:</p>
+      <ul style="margin:0 0 16px 0;padding-left:20px">
+        ${openShort.map(i => `<li>Week ${isoWeek(weeks[i].monday)} (${range(i)}): you logged ${logged(i)}.${missing(i)}</li>`).join('\n        ')}
+      </ul>`;
   const repeat    = shortWeeks > 1
     ? `<p style="margin:0 0 16px 0">This is the <strong>${shortWeeks}${['', 'st', 'nd', 'rd'][shortWeeks] || 'th'} week out of the last ${weeks.length}</strong> that came out short.</p>`
     : '';
@@ -488,10 +501,7 @@ function buildFollowUpHtml(row, weeks, signature) {
   <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
     <div style="padding:24px 28px">
       <p style="margin:0 0 16px 0">Hello ${escHtml(firstName)},</p>
-      <p style="margin:0 0 16px 0">
-        Last week (week ${isoWeek(weeks[lastIdx].monday)}, ${weeks[lastIdx].start} &ndash; ${weeks[lastIdx].end}) you logged
-        <strong>${total.toFixed(1)} of ${target} hours (${Math.round((total / target) * 100)}%)</strong> in Time Tracker.${missing}
-      </p>
+      ${weeksText}
       ${repeat}
       <p style="margin:0 0 16px 0">
         You have already been reminded to log your hours, and they are still incomplete.
@@ -640,10 +650,16 @@ async function main() {
   }
   console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
 
-  // Load time entries for the relevant month(s) — the digest reaches back TREND_WEEKS weeks
-  const weeks     = getTrendWeeks(start);
   const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(now);
-  const dailyDays = getWorkingDaysBack(dailyDay, Math.max(1, parseInt(dailyCfg.lookbackDays, 10) || 1));
+  const lookback  = Math.max(1, parseInt(dailyCfg.lookbackDays, 10) || 1);
+  const dailyDays = getWorkingDaysBack(dailyDay, lookback);
+  // The digest and its follow-up reach back the same number of working days as the daily
+  // reminder, counted from the Friday of the digest's week and rounded up to full weeks.
+  // The digest shows TREND_WEEKS to DIGEST_MAX_WEEKS of them; the follow-up covers exactly the look-back.
+  const lookbackFirst = getWorkingDaysBack(addDays(start, 4), lookback)[0];
+  const lookbackWeeks = Math.round((start - new Date(mondayOf(lookbackFirst) + 'T00:00:00')) / (7 * 86400000)) + 1;
+  const weeks     = getTrendWeeks(start, Math.max(TREND_WEEKS, lookbackWeeks));
+  // Load time entries for the relevant month(s)
   const ranges    = [];
   if (sendPersonal) ranges.push([start, end]);
   if (sendDigest)   ranges.push([weeks[0].monday, end]);
@@ -718,36 +734,47 @@ async function main() {
     const editWindowDays = parseInt(settings.editWindowDays, 10);
     const editCutoff     = isNaN(editWindowDays) || editWindowDays < 0 ? null : toDateStr(addDays(new Date(), -editWindowDays));
     const rows          = buildDigestRows(enabledUsers, allEntries, weeks);
-    for (const r of rows) {
+    // The digest table shows only the newest DIGEST_MAX_WEEKS; the follow-up below uses all weeks
+    const shown         = Math.min(weeks.length, DIGEST_MAX_WEEKS);
+    const digestRows    = rows.map(r => ({ ...r, totals: r.totals.slice(-shown) }));
+    for (const r of digestRows) {
       console.log(`Digest: ${r.user.userName} — ${r.totals.map(t => t.toFixed(1)).join(' / ')} h` +
                   (r.missing.length ? `  | no hours: ${r.missing.join(', ')}` : ''));
     }
     mails.push({
-      total: rows.reduce((s, r) => s + r.totals[r.totals.length - 1], 0),
+      total: digestRows.reduce((s, r) => s + r.totals[r.totals.length - 1], 0),
       mailOptions: {
         from:    SMTP_FROM,
         to:      digestRecipients.join(', '),
         subject: `Team Hours Digest: ${startStr} – ${endStr}`,
-        html:    buildDigestHtml(rows, weeks, editCutoff, editWindowDays),
+        html:    buildDigestHtml(digestRows, weeks.slice(-shown), editCutoff, editWindowDays),
       }
     });
 
-    // Firm follow-up to everyone below target last week. Always sent when short:
-    // planned holidays are logged ahead, so a gap means sick leave or missing hours.
+    // Firm follow-up to everyone with a short week within the daily reminder's look-back
+    // (not the edit window: a week that can't be fixed anymore was still done wrong).
+    // Always sent when short: planned holidays are logged ahead, so a gap means sick
+    // leave or missing hours.
     if (digestCfg.followUp) {
-      const lastIdx  = weeks.length - 1;
       const followTo = (digestCfg.followUpAddress || '').trim();
-      for (const r of rows.filter(r => r.user.targetHours > 0 && r.totals[lastIdx] < r.user.targetHours)) {
-        console.log(`Follow-up: ${r.user.userName} — ${r.totals[lastIdx].toFixed(1)} of ${r.user.targetHours} h`);
+      for (const r of rows) {
+        const target    = r.user.targetHours;
+        const openShort = weeks.map((_, i) => i)
+          .filter(i => i >= weeks.length - lookbackWeeks && target > 0 && r.totals[i] < target);
+        if (!openShort.length) continue;
+        const weekNums = openShort.map(i => isoWeek(weeks[i].monday));
+        console.log(`Follow-up: ${r.user.userName} — ` +
+                    openShort.map(i => `wk ${isoWeek(weeks[i].monday)} ${r.totals[i].toFixed(1)}`).join(', ') + ` of ${target} h`);
         mails.push({
-          total: r.totals[lastIdx],
+          total: openShort.reduce((s, i) => s + r.totals[i], 0),
           mailOptions: {
             from:     SMTP_FROM,
             to:       r.user.userEmail,
             bcc:      followTo || undefined,
             replyTo:  followTo || undefined,
-            subject:  `Action required: your hours for week ${isoWeek(weeks[lastIdx].monday)} are incomplete`,
-            html:     buildFollowUpHtml(r, weeks, (digestCfg.followUpSignature || '').trim()),
+            subject:  `Action required: your hours for ${weekNums.length === 1 ? 'week' : 'weeks'} ` +
+                      `${weekNums.length === 1 ? weekNums[0] : weekNums.slice(0, -1).join(', ') + ' and ' + weekNums[weekNums.length - 1]} are incomplete`,
+            html:     buildFollowUpHtml(r, weeks, openShort, (digestCfg.followUpSignature || '').trim()),
             priority: 'high',
           }
         });
