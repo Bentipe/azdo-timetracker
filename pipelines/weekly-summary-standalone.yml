@@ -1,4 +1,4 @@
-# Weekly Hour Summary Emails — standalone version
+﻿# Weekly Hour Summary Emails — standalone version
 #
 # Use this file if the extension repository is NOT hosted in the same Azure
 # DevOps instance where you want to run the pipeline.
@@ -8,6 +8,9 @@
 # Runs every hour. The script reads the configured send day + time from the
 # Notification Settings page and exits if it is not the right moment.
 # Change the schedule from Notification Settings — no YAML edits needed.
+# The same run also sends the Manager Digest (one team overview with a trend over
+# the daily reminder's look-back, 4 to 8 weeks) on its own day + time, and the Daily Reminder (weekday mornings, to
+# people whose previous working day came out short). All set in Notification Settings.
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
 #   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
@@ -18,12 +21,16 @@
 #   SMTP_FROM          timetracker@yourcompany.com
 #   SMTP_PORT          25                               (optional)
 #   SMTP_SECURE        false                            (optional, true for TLS)
+#   SMTP_IGNORE_TLS    true                             (optional, skip STARTTLS — use when server cert is expired)
 #   SMTP_USER                                          (optional, for SMTP auth)
 #   SMTP_PASS                                          (optional)               [SECRET]
+#   TIMETRACKER_URL    Link added to the daily reminder (optional)
 #
 # ── Runtime parameters (set when triggering manually for testing) ─────────────
 #   override_week_start   Monday date YYYY-MM-DD  — use any past week for testing
 #   dry_run               true                    — log output, do NOT send emails
+#   override_day          YYYY-MM-DD              — send the daily reminder for this day now
+#   mails                 all | personal | digest | daily — limit a test run to one kind of mail
 
 parameters:
   - name: override_week_start
@@ -34,6 +41,15 @@ parameters:
     type: boolean
     default: false
     displayName: 'Dry run (log only, do not send emails)'
+  - name: override_day
+    type: string
+    default: 'none'
+    displayName: 'Daily reminder: check this day now (YYYY-MM-DD, leave as none for the schedule)'
+  - name: mails
+    type: string
+    default: all
+    values: [all, personal, digest, daily]
+    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder)'
 
 schedules:
   - cron: "0 * * * *"
@@ -46,252 +62,926 @@ schedules:
 
 trigger: none
 
-pool:
-  name: Default   # your self-hosted agent pool
+jobs:
+  - job: SendWeeklySummary
+    timeoutInMinutes: 70
+    pool:
+      name: Default
+      demands:
+        - Agent.OS -equals Windows_NT
+    steps:
+      - task: NodeTool@0
+        displayName: Use Node.js 16
+        inputs:
+          versionSpec: '16.x'
 
-steps:
-  - task: NodeTool@0
-    displayName: Use Node.js 16
-    inputs:
-      versionSpec: '16.x'
+      - script: npm install nodemailer
+        displayName: Install nodemailer
 
-  - script: npm install nodemailer
-    displayName: Install nodemailer
+      - task: PowerShell@2
+        displayName: Write script to disk
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $script = @'
+            'use strict';
 
-  - task: PowerShell@2
-    displayName: Write script to disk
-    inputs:
-      pwsh: false
-      targetType: inline
-      script: |
-        $script = @'
-        'use strict';
+            /**
+             * Weekly hour summary mailer for Azure DevOps Time Tracker.
+             *
+             * Reads notification config and time entries from the Azure DevOps Extension
+             * Data REST API, then sends one HTML email per enabled user via SMTP.
+             * When the manager digest is enabled it also sends one team overview (last
+             * week per person + a trend over the daily reminder's look-back, 4 to 8 weeks) to the configured managers, on its own
+             * day/time, plus (optionally) a firm follow-up to everyone with a short week
+             * in the daily reminder's look-back, with Reply-To + BCC to one configured address. And each weekday
+             * morning (when enabled) it reminds everyone whose last few working days
+             * (lookbackDays, default 1) came out short. All schedules live in
+             * Notification Settings.
+             *
+             * Required environment variables:
+             *   AZDO_SERVER_URL   e.g. http://devops.company.com/DefaultCollection
+             *   AZDO_PAT          Personal Access Token (needs vso.extension.data scope)
+             *   SMTP_HOST         SMTP relay hostname
+             *   SMTP_FROM         From address, e.g. timetracker@company.com
+             *
+             * Optional environment variables:
+             *   AZDO_PUBLISHER    Extension publisher  (default: miguelnicolas)
+             *   AZDO_EXTENSION_ID Extension id        (default: timetracker-extension)
+             *   SMTP_PORT         SMTP port            (default: 25)
+             *   SMTP_SECURE       true for TLS         (default: false)
+             *   SMTP_USER         SMTP auth username   (default: none)
+             *   SMTP_PASS         SMTP auth password   (default: none)
+             *   DRY_RUN           true = log only, no emails sent (default: false)
+             *   MAILS             all | personal | digest | daily — which mails a run may send (default: all)
+             *   OVERRIDE_DAY      YYYY-MM-DD — send the daily reminder for this day now, ignoring its schedule
+             *   TIMETRACKER_URL   Link added to the daily reminder (default: none)
+             */
 
-        const https      = require('https');
-        const http       = require('http');
-        const nodemailer = require('nodemailer');
+            const https     = require('https');
+            const http      = require('http');
+            const nodemailer = require('nodemailer');
 
-        const AZDO_SERVER_URL   = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
-        const AZDO_PAT          = process.env.AZDO_PAT          || '';
-        const AZDO_PUBLISHER    = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
-        const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
-        const SMTP_HOST         = process.env.SMTP_HOST         || '';
-        const SMTP_PORT         = parseInt(process.env.SMTP_PORT || '25', 10);
-        const SMTP_FROM         = process.env.SMTP_FROM         || '';
-        const SMTP_SECURE       = process.env.SMTP_SECURE === 'true';
-        const SMTP_USER         = process.env.SMTP_USER         || null;
-        const SMTP_PASS         = process.env.SMTP_PASS         || null;
-        const DRY_RUN           = process.env.DRY_RUN === 'true';
-        const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
+            // ---------------------------------------------------------------------------
+            // Config
+            // ---------------------------------------------------------------------------
 
-        const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
+            const AZDO_SERVER_URL  = (process.env.AZDO_SERVER_URL  || '').replace(/\/$/, '');
+            const AZDO_PAT         = process.env.AZDO_PAT          || '';
+            // Strip unresolved Azure Pipelines variable syntax "$(VAR)" so JS defaults kick in
+            const AZDO_PUBLISHER   = ((process.env.AZDO_PUBLISHER    || '').replace(/^\$\(.*\)$/, '')) || 'miguelnicolas';
+            const AZDO_EXTENSION_ID = ((process.env.AZDO_EXTENSION_ID || '').replace(/^\$\(.*\)$/, '')) || 'timetracker-extension';
+            const SMTP_HOST        = process.env.SMTP_HOST         || '';
+            const SMTP_PORT        = parseInt(process.env.SMTP_PORT || '25', 10);
+            const SMTP_FROM        = process.env.SMTP_FROM         || '';
+            const SMTP_SECURE      = process.env.SMTP_SECURE === 'true';
+            const SMTP_IGNORE_TLS  = process.env.SMTP_IGNORE_TLS === 'true';
+            const SMTP_USER        = process.env.SMTP_USER         || null;
+            const SMTP_PASS        = process.env.SMTP_PASS         || null;
+            const DRY_RUN             = process.env.DRY_RUN === 'true';
+            const OVERRIDE_WEEK_START = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_WEEK_START || '').trim()) ? process.env.OVERRIDE_WEEK_START.trim() : '';
+            const OVERRIDE_DAY        = /^\d{4}-\d{2}-\d{2}$/.test((process.env.OVERRIDE_DAY || '').trim()) ? process.env.OVERRIDE_DAY.trim() : '';
+            const MAILS               = ['personal', 'digest', 'daily'].includes((process.env.MAILS || '').trim()) ? process.env.MAILS.trim() : 'all';
+            const TIMETRACKER_URL     = (process.env.TIMETRACKER_URL || '').replace(/^\$\(.*\)$/, '').trim();
+            const TREND_WEEKS         = 4;
+            const DIGEST_MAX_WEEKS    = 8; // more week columns don't fit the digest's 760px layout
 
-        function toDateStr(d) {
-          const y = d.getFullYear();
-          const m = String(d.getMonth() + 1).padStart(2, '0');
-          const day = String(d.getDate()).padStart(2, '0');
-          return `${y}-${m}-${day}`;
-        }
+            const REQUIRED_VARS = ['AZDO_SERVER_URL', 'AZDO_PAT', 'SMTP_HOST', 'SMTP_FROM'];
 
-        function formatDisplayDate(dateStr) {
-          const d = new Date(dateStr + 'T00:00:00');
-          return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-        }
+            // ---------------------------------------------------------------------------
+            // Date helpers
+            // ---------------------------------------------------------------------------
 
-        function getLastWeekRange() {
-          const now = new Date();
-          now.setHours(0, 0, 0, 0);
-          const day = now.getDay();
-          const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
-          const monday = new Date(now);
-          monday.setDate(now.getDate() - daysToLastMonday);
-          const sunday = new Date(monday);
-          sunday.setDate(monday.getDate() + 6);
-          return { start: monday, end: sunday };
-        }
+            function toDateStr(d) {
+              const y = d.getFullYear();
+              const m = String(d.getMonth() + 1).padStart(2, '0');
+              const day = String(d.getDate()).padStart(2, '0');
+              return `${y}-${m}-${day}`;
+            }
 
-        function getMonthKeysForRange(start, end) {
-          const keys = [];
-          const cur = new Date(start.getFullYear(), start.getMonth(), 1);
-          const endMon = new Date(end.getFullYear(), end.getMonth(), 1);
-          while (cur <= endMon) {
-            const y = cur.getFullYear();
-            const m = String(cur.getMonth() + 1).padStart(2, '0');
-            keys.push(`timetracker_${y}_${m}`);
-            cur.setMonth(cur.getMonth() + 1);
-          }
-          return keys;
-        }
+            function formatDisplayDate(dateStr) {
+              // "2026-05-04" -> "Mon 4 May 2026"
+              const d = new Date(dateStr + 'T00:00:00');
+              return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+            }
 
-        function authHeader() {
-          return 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64');
-        }
+            /**
+             * Returns the Monday–Sunday range of the previous week.
+             * When called on a Monday, "last week" = the 7 days that just ended yesterday.
+             */
+            function getLastWeekRange() {
+              const now = new Date();
+              now.setHours(0, 0, 0, 0);
+              const day = now.getDay(); // 0=Sun … 6=Sat
+              const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7; // always go back a full week
+              const monday = new Date(now);
+              monday.setDate(now.getDate() - daysToLastMonday);
+              const sunday = new Date(monday);
+              sunday.setDate(monday.getDate() + 6);
+              return { start: monday, end: sunday };
+            }
 
-        function extDataBase() {
-          return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
-                 `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
-        }
+            function addDays(d, n) {
+              const r = new Date(d);
+              r.setDate(d.getDate() + n);
+              return r;
+            }
 
-        function fetchJson(url) {
-          return new Promise((resolve, reject) => {
-            const lib = url.startsWith('https') ? https : http;
-            const req = lib.get(url, {
-              headers: { Authorization: authHeader(), Accept: 'application/json' }
-            }, (res) => {
-              let body = '';
-              res.on('data', chunk => body += chunk);
-              res.on('end', () => {
-                if (res.statusCode === 404) { resolve(null); return; }
-                if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0,200)}`)); return; }
-                try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+            function isoWeek(d) {
+              const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+              t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7)); // Thursday of this week decides the year
+              const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+              return Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+            }
+
+            /**
+             * The day the daily reminder checks: yesterday, walking back past the weekend,
+             * so a Monday run checks the prior Friday.
+             */
+            function getPreviousWorkingDay(now) {
+              let d = addDays(now, -1);
+              while (d.getDay() === 0 || d.getDay() === 6) d = addDays(d, -1);
+              d.setHours(0, 0, 0, 0);
+              return d;
+            }
+
+            /**
+             * The last `count` working days (Mon–Fri) up to and including lastDay, oldest
+             * first — the days the daily reminder looks back over.
+             */
+            function getWorkingDaysBack(lastDay, count) {
+              const days = [];
+              for (let d = lastDay; days.length < count; d = addDays(d, -1)) {
+                if (d.getDay() !== 0 && d.getDay() !== 6) days.unshift(toDateStr(d));
+              }
+              return days;
+            }
+
+            function mondayOf(dateStr) {
+              const d = new Date(dateStr + 'T00:00:00');
+              return toDateStr(addDays(d, -((d.getDay() + 6) % 7)));
+            }
+
+            /**
+             * Hours a user is expected to log on a date. Their own Mon–Fri schedule wins
+             * (e.g. [8, 8, 4, 8, 8]); otherwise the weekly target is spread evenly over
+             * Mon–Fri. Null when the user has neither — then any hours at all will do.
+             */
+            function dailyExpectation(user, dateStr) {
+              const wd = new Date(dateStr + 'T00:00:00').getDay();
+              if (wd === 0 || wd === 6) return 0;
+              if (Array.isArray(user.daySchedule) && user.daySchedule.length === 5) return Number(user.daySchedule[wd - 1]) || 0;
+              if (user.targetHours > 0) return user.targetHours / 5;
+              return null;
+            }
+
+            function isShortDay(user, dateStr, logged) {
+              const expected = dailyExpectation(user, dateStr);
+              return expected === null ? logged <= 0 : logged + 0.001 < expected;
+            }
+
+            function getMonthKeysForRange(start, end) {
+              const keys = [];
+              const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+              const endMon = new Date(end.getFullYear(), end.getMonth(), 1);
+              while (cur <= endMon) {
+                const y = cur.getFullYear();
+                const m = String(cur.getMonth() + 1).padStart(2, '0');
+                keys.push(`timetracker_${y}_${m}`);
+                cur.setMonth(cur.getMonth() + 1);
+              }
+              return keys;
+            }
+
+            // ---------------------------------------------------------------------------
+            // Azure DevOps Extension Data REST API
+            // ---------------------------------------------------------------------------
+
+            function authHeader() {
+              return 'Basic ' + Buffer.from(':' + AZDO_PAT).toString('base64');
+            }
+
+            function extDataBase() {
+              return `${AZDO_SERVER_URL}/_apis/ExtensionManagement/InstalledExtensions` +
+                     `/${AZDO_PUBLISHER}/${AZDO_EXTENSION_ID}/Data/Scopes/Default/Current`;
+            }
+
+            function fetchJson(url) {
+              return new Promise((resolve, reject) => {
+                const lib = url.startsWith('https') ? https : http;
+                const req = lib.get(url, {
+                  headers: {
+                    Authorization: authHeader(),
+                    Accept: 'application/json',
+                  }
+                }, (res) => {
+                  let body = '';
+                  res.on('data', chunk => body += chunk);
+                  res.on('end', () => {
+                    if (res.statusCode === 404) { resolve(null); return; }
+                    if (res.statusCode >= 400) {
+                      reject(new Error(`HTTP ${res.statusCode} for ${url}: ${body.slice(0, 200)}`));
+                      return;
+                    }
+                    try { resolve(JSON.parse(body)); }
+                    catch (e) { reject(new Error(`JSON parse error for ${url}: ${e.message}`)); }
+                  });
+                });
+                req.on('error', reject);
               });
-            });
-            req.on('error', reject);
-          });
-        }
+            }
 
-        async function fetchDocument(collectionName, debug) {
-          // VSS SDK getValue/setValue always uses the $settings built-in collection
-          const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
-          if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
-          const doc = await fetchJson(url);
-          if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
-          if (!doc) return null;
-          if ('__val__' in doc) return doc.__val__;
-          if ('value' in doc) return doc.value;
-          const result = {};
-          for (const [k, v] of Object.entries(doc)) {
-            if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') result[k] = v;
-          }
-          return result;
-        }
+            /**
+             * Fetches a single Extension Data document.
+             * The VSS SDK setValue() stores plain objects spread into the document,
+             * and arrays/primitives wrapped in a __val__ property.
+             */
+            async function fetchDocument(collectionName, debug) {
+              // VSS SDK getValue/setValue always uses the $settings built-in collection
+              const url = `${extDataBase()}/Collections/%24settings/Documents/${collectionName}?api-version=5.0-preview.1`;
+              if (debug) console.log(`[DEBUG] fetchDocument URL: ${url}`);
+              const doc = await fetchJson(url);
+              if (debug) console.log(`[DEBUG] fetchDocument raw response: ${JSON.stringify(doc)}`);
+              if (!doc) return null;
 
-        const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+              // Arrays/primitives stored via setValue are wrapped in __val__
+              if ('__val__' in doc) return doc.__val__;
 
-        function escHtml(str) {
-          return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        }
+              // DevOps Server 2022 REST API wraps the payload in a "value" key
+              if ('value' in doc) return doc.value;
 
-        function buildEmailHtml(user, days, startStr, endStr) {
-          const total = days.reduce((sum, d) => sum + d.hours, 0);
-          const rows = days.map(d => {
-            const bg = d.hours === 0 ? '#fff4ce' : '#ffffff';
-            const hoursCell = d.hours > 0 ? `<strong>${d.hours.toFixed(1)}</strong>` : `<span style="color:#797775">—</span>`;
-            return `<tr style="background:${bg}"><td style="padding:8px 14px;border-bottom:1px solid #edebe9">${d.dayName}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;color:#605e5c">${formatDisplayDate(d.date)}</td><td style="padding:8px 14px;border-bottom:1px solid #edebe9;text-align:right">${hoursCell}</td></tr>`;
-          }).join('');
-          return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,sans-serif;font-size:14px;color:#323130"><div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden"><div style="background:#0078d4;padding:20px 28px"><h2 style="margin:0;color:white;font-size:18px">Weekly Hours Summary</h2><p style="margin:4px 0 0;color:#deecf9;font-size:13px">${startStr} &ndash; ${endStr}</p></div><div style="padding:24px 28px"><p style="margin:0 0 16px">Hi <strong>${escHtml(user.userName)}</strong>,</p><p style="margin:0 0 16px;color:#605e5c">Here is your time logging summary for last week:</p><table style="width:100%;border-collapse:collapse;border:1px solid #edebe9"><thead><tr style="background:#f3f2f1"><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Day</th><th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Date</th><th style="padding:9px 14px;text-align:right;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Hours</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#f3f2f1;font-weight:600"><td colspan="2" style="padding:9px 14px">Total</td><td style="padding:9px 14px;text-align:right;font-size:16px;color:#0078d4">${total.toFixed(1)}</td></tr></tfoot></table><p style="margin:24px 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">This is an automated weekly reminder from Time Tracker. Please keep your hours up to date in Azure DevOps.</p></div></div></body></html>`;
-        }
+              // Fallback: plain objects spread into the document — strip metadata keys
+              const result = {};
+              for (const [k, v] of Object.entries(doc)) {
+                if (k !== 'id' && k !== '__etag' && k !== '__vso_document_version__') {
+                  result[k] = v;
+                }
+              }
+              return result;
+            }
 
-        async function main() {
-          const missing = REQUIRED_VARS.filter(v => !process.env[v]);
-          if (missing.length) { console.error('Missing required env vars:', missing.join(', ')); process.exit(1); }
-          if (DRY_RUN) console.log('[DRY RUN] No emails will be sent.');
+            /**
+             * DevOps Server's REST API returns arrays nested inside a document as
+             * array-like objects ({"0": …, "1": …, "length": n}); turn them back into arrays.
+             */
+            function asArray(v) {
+              if (Array.isArray(v)) return v;
+              return v && typeof v.length === 'number' ? Array.from(v) : [];
+            }
 
-          let { start, end } = getLastWeekRange();
-          if (OVERRIDE_WEEK_START) {
-            start = new Date(OVERRIDE_WEEK_START + 'T00:00:00');
-            if (isNaN(start.getTime())) { console.error('Invalid OVERRIDE_WEEK_START:', OVERRIDE_WEEK_START); process.exit(1); }
-            end = new Date(start);
-            end.setDate(start.getDate() + 6);
-            console.log('[OVERRIDE] Using specified week.');
-          }
+            // ---------------------------------------------------------------------------
+            // Email
+            // ---------------------------------------------------------------------------
 
-          const startStr = toDateStr(start);
-          const endStr   = toDateStr(end);
-          console.log(`Processing week: ${startStr} -> ${endStr}`);
+            const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-          const config = await fetchDocument('notification-config', true);
-          console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
-          console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
+            function buildTotalCell(total, target) {
+              const { color, label } = targetStatus(total, target);
+              const totalStr = total.toFixed(1);
+              if (!target || target <= 0) {
+                return `<span style="font-weight:600;font-size:16px;color:${color}">${totalStr}</span>`;
+              }
+              const pct = Math.round((total / target) * 100);
+              return `<span style="font-weight:600;font-size:16px;color:${color}">${totalStr}&thinsp;/&thinsp;${target}</span>` +
+                     `<br><span style="font-size:11px;color:${color}">${pct}% &mdash; ${label}</span>`;
+            }
 
-          // Schedule check — the pipeline runs hourly; the script decides whether it's send time.
-          // Skipped when OVERRIDE_WEEK_START is set (manual test run).
-          if (!OVERRIDE_WEEK_START) {
-            const sched = config && config.schedule;
-            if (sched && sched.utcDay !== undefined && sched.utcHour !== undefined) {
-              const now     = new Date();
+            function targetStatus(total, target) {
+              if (!target || target <= 0) return { color: '#0078d4', label: null };
+              const pct = total / target;
+              if (pct < 0.50) return { color: '#d13438', label: 'Poor' };
+              if (pct < 0.75) return { color: '#ca5010', label: 'Medium' };
+              if (pct < 1.00) return { color: '#986f0b', label: 'OK (not Good)' };
+              return { color: '#107c10', label: 'Good' };
+            }
+
+            function buildEmailHtml(user, days, startStr, endStr) {
+              const total  = days.reduce((sum, d) => sum + d.hours, 0);
+              const target = user.targetHours || 0;
+
+              const rows = days.map(d => {
+                const bg    = d.hours === 0 ? '#fff4ce' : '#ffffff';
+                const hoursCell = d.hours > 0
+                  ? `<strong>${d.hours.toFixed(1)}</strong>`
+                  : `<span style="color:#797775">—</span>`;
+                return `
+                  <tr style="background:${bg}">
+                    <td style="padding:8px 14px;border-bottom:1px solid #edebe9">${d.dayName}</td>
+                    <td style="padding:8px 14px;border-bottom:1px solid #edebe9;color:#605e5c">${formatDisplayDate(d.date)}</td>
+                    <td style="padding:8px 14px;border-bottom:1px solid #edebe9;text-align:right">${hoursCell}</td>
+                  </tr>`;
+              }).join('');
+
+              return `<!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+              <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+
+                <div style="background:#0078d4;padding:20px 28px">
+                  <h2 style="margin:0;color:white;font-weight:600;font-size:18px">Weekly Hours Summary</h2>
+                  <p style="margin:4px 0 0 0;color:#deecf9;font-size:13px">${startStr} &ndash; ${endStr}</p>
+                </div>
+
+                <div style="padding:24px 28px">
+                  <p style="margin:0 0 20px 0">Hi <strong>${escHtml(user.userName)}</strong>,</p>
+                  <p style="margin:0 0 20px 0;color:#605e5c">
+                    Here is your time logging summary for last week:
+                  </p>
+
+                  <table style="width:100%;border-collapse:collapse;border:1px solid #edebe9;border-radius:4px;overflow:hidden">
+                    <thead>
+                      <tr style="background:#f3f2f1">
+                        <th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Day</th>
+                        <th style="padding:9px 14px;text-align:left;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Date</th>
+                        <th style="padding:9px 14px;text-align:right;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9">Hours</th>
+                      </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                    <tfoot>
+                      <tr style="background:#f3f2f1">
+                        <td colspan="2" style="padding:9px 14px;font-weight:600">Total</td>
+                        <td style="padding:9px 14px;text-align:right">${buildTotalCell(total, target)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+
+                  <p style="margin:24px 0 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+                    This is an automated weekly reminder from Time Tracker.
+                    Please keep your hours up to date in Azure DevOps.
+                  </p>
+                </div>
+              </div>
+            </body>
+            </html>`;
+            }
+
+            function escHtml(str) {
+              return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+            }
+
+            // ---------------------------------------------------------------------------
+            // Manager digest
+            // ---------------------------------------------------------------------------
+
+            /**
+             * The `count` (default TREND_WEEKS) Monday–Sunday weeks ending with `lastWeekStart`'s week, oldest first.
+             */
+            function getTrendWeeks(lastWeekStart, count = TREND_WEEKS) {
+              const weeks = [];
+              for (let i = count - 1; i >= 0; i--) {
+                const monday = addDays(lastWeekStart, -7 * i);
+                weeks.push({ monday, start: toDateStr(monday), end: toDateStr(addDays(monday, 6)) });
+              }
+              return weeks;
+            }
+
+            /**
+             * One row per user: hours per trend week, plus the weekdays of the last week
+             * with nothing logged. Sorted worst first, so the people to talk to are on top;
+             * users without a target go last.
+             */
+            function buildDigestRows(users, entries, weeks) {
+              const last = weeks[weeks.length - 1];
+              const rows = users.map(user => {
+                const mine   = entries.filter(e => e.userId === user.userId);
+                const totals = weeks.map(w => mine
+                  .filter(e => e.date >= w.start && e.date <= w.end)
+                  .reduce((sum, e) => sum + (Number(e.hours) || 0), 0));
+                const missing = [];
+                for (let i = 0; i < 5; i++) { // Mon–Fri
+                  const d = addDays(last.monday, i);
+                  const dateStr = toDateStr(d);
+                  if (dailyExpectation(user, dateStr) === 0) continue; // not a working day for this user
+                  if (!mine.some(e => e.date === dateStr && Number(e.hours) > 0)) missing.push(DAY_NAMES[d.getDay()].slice(0, 3));
+                }
+                return { user, totals, missing };
+              });
+              const score = r => r.user.targetHours > 0 ? r.totals[r.totals.length - 1] / r.user.targetHours : Infinity;
+              rows.sort((a, b) => (score(a) - score(b)) || (a.user.userName || '').localeCompare(b.user.userName || ''));
+              return rows;
+            }
+
+            function buildDigestHtml(rows, weeks, editCutoff, editWindowDays) {
+              const th = 'padding:9px 10px;font-size:12px;font-weight:600;color:#605e5c;border-bottom:2px solid #edebe9';
+              const td = 'padding:8px 10px;border-bottom:1px solid #edebe9';
+              const lastIdx = weeks.length - 1;
+
+              const weekHeaders = weeks.map((w, i) => {
+                const locked = editCutoff && w.end < editCutoff;
+                const label  = w.monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                return `<th style="${th};text-align:right;white-space:nowrap;${i === lastIdx ? 'background:#e1effa;' : ''}">` +
+                       `Wk ${isoWeek(w.monday)}<br><span style="font-weight:400;font-size:11px">${label}${locked ? '<br>final' : ''}</span></th>`;
+              }).join('');
+
+              const body = rows.map(r => {
+                const target = r.user.targetHours || 0;
+                const cells = r.totals.map((total, i) => {
+                  const { color } = targetStatus(total, target);
+                  const pct = target > 0
+                    ? `<br><span style="font-size:11px;color:${color}">${Math.round((total / target) * 100)}%</span>`
+                    : '';
+                  return `<td style="${td};text-align:right;${i === lastIdx ? 'background:#f3f9fd;' : ''}">` +
+                         `<span style="font-weight:${i === lastIdx ? 700 : 600};color:${color}">${total.toFixed(1)}</span>${pct}</td>`;
+                }).join('');
+                // Empty days are only a problem when the week falls short — part-timers have them by design
+                const short   = !target || r.totals[lastIdx] < target;
+                const missing = r.missing.length
+                  ? `<span style="color:${short ? '#d13438' : '#a19f9d'}">${r.missing.join(', ')}</span>`
+                  : `<span style="color:#107c10">&mdash;</span>`;
+                return `
+                  <tr>
+                    <td style="${td};white-space:nowrap">${escHtml(r.user.userName)}</td>
+                    <td style="${td};text-align:right;color:#605e5c">${target || '&mdash;'}</td>
+                    ${cells}
+                    <td style="${td}">${missing}</td>
+                  </tr>`;
+              }).join('');
+
+              const withTarget = rows.filter(r => r.user.targetHours > 0);
+              const below      = withTarget.filter(r => r.totals[lastIdx] < r.user.targetHours).length;
+              const emptyDays  = rows.reduce((sum, r) => sum + r.missing.length, 0);
+              const summary    = `${below} of ${withTarget.length} people below target last week &middot; ` +
+                                 `${emptyDays} weekday${emptyDays === 1 ? '' : 's'} with no hours logged`;
+
+              const lockNote = editCutoff
+                ? ` Entries older than ${editWindowDays} days are locked, so weeks marked <em>final</em> can no longer change.`
+                : '';
+
+              return `<!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+              <div style="max-width:760px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+
+                <div style="background:#0078d4;padding:20px 28px">
+                  <h2 style="margin:0;color:white;font-weight:600;font-size:18px">Team Hours Digest</h2>
+                  <p style="margin:4px 0 0 0;color:#deecf9;font-size:13px">Last week: ${weeks[lastIdx].start} &ndash; ${weeks[lastIdx].end}</p>
+                </div>
+
+                <div style="padding:24px 28px">
+                  <p style="margin:0 0 20px 0;font-weight:600">${summary}</p>
+
+                  <table style="width:100%;border-collapse:collapse;border:1px solid #edebe9">
+                    <thead>
+                      <tr style="background:#f3f2f1">
+                        <th style="${th};text-align:left">Name</th>
+                        <th style="${th};text-align:right">Target h/w</th>
+                        ${weekHeaders}
+                        <th style="${th};text-align:left">No hours last week</th>
+                      </tr>
+                    </thead>
+                    <tbody>${body}</tbody>
+                  </table>
+
+                  <p style="margin:24px 0 0 0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+                    Week totals are recalculated from the current data on every send, so an earlier week that
+                    has gone up since the last digest means gaps were filled in afterwards.${lockNote}
+                  </p>
+                </div>
+              </div>
+            </body>
+            </html>`;
+            }
+
+            /**
+             * The firm follow-up a person gets alongside the digest when weeks within the
+             * look-back (`openShort`, indexes into `weeks`) came out below their target.
+             * Only facts from the digest row, so it can't be argued with.
+             */
+            function buildFollowUpHtml(row, weeks, openShort, signature) {
+              const lastIdx   = weeks.length - 1;
+              const target    = row.user.targetHours;
+              const firstName = String(row.user.userName || '').trim().split(/\s+/)[0] || 'there';
+              const shortWeeks = row.totals.filter(t => t < target).length;
+              // row.missing only covers last week
+              const missing   = i => i === lastIdx && row.missing.length
+                ? ` Nothing at all was logged on <strong>${row.missing.join(', ')}</strong>.`
+                : '';
+              const range  = i => `${weeks[i].start} &ndash; ${weeks[i].end}`;
+              const logged = i => `<strong>${row.totals[i].toFixed(1)} of ${target} hours (${Math.round((row.totals[i] / target) * 100)}%)</strong>`;
+              const weeksText = openShort.length === 1
+                ? `<p style="margin:0 0 16px 0">
+                    ${openShort[0] === lastIdx ? `Last week (week ${isoWeek(weeks[lastIdx].monday)}, ${range(lastIdx)})` : `In week ${isoWeek(weeks[openShort[0]].monday)} (${range(openShort[0])})`} you logged
+                    ${logged(openShort[0])} in Time Tracker.${missing(openShort[0])}
+                  </p>`
+                : `<p style="margin:0 0 8px 0">These weeks are still incomplete in Time Tracker:</p>
+                  <ul style="margin:0 0 16px 0;padding-left:20px">
+                    ${openShort.map(i => `<li>Week ${isoWeek(weeks[i].monday)} (${range(i)}): you logged ${logged(i)}.${missing(i)}</li>`).join('\n        ')}
+                  </ul>`;
+              const repeat    = shortWeeks > 1
+                ? `<p style="margin:0 0 16px 0">This is the <strong>${shortWeeks}${['', 'st', 'nd', 'rd'][shortWeeks] || 'th'} week out of the last ${weeks.length}</strong> that came out short.</p>`
+                : '';
+              const link = TIMETRACKER_URL
+                ? `<p style="margin:0 0 20px 0"><a href="${escHtml(TIMETRACKER_URL)}" style="color:#0078d4">Open Time Tracker</a></p>`
+                : '';
+
+              return `<!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+              <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+                <div style="padding:24px 28px">
+                  <p style="margin:0 0 16px 0">Hello ${escHtml(firstName)},</p>
+                  ${weeksText}
+                  ${repeat}
+                  <p style="margin:0 0 16px 0">
+                    You have already been reminded to log your hours, and they are still incomplete.
+                    <strong>Please fix your hours today.</strong>
+                  </p>
+                  <p style="margin:0 0 20px 0">
+                    Missing hours are only excusable when you were sick or on holiday. If that is the case, you can ignore
+                    this email, but please consider it a gentle reminder to fix your hours anyway.
+                  </p>
+                  ${link}
+                  ${signature ? `<p style="margin:0">${escHtml(signature).replace(/\r?\n/g, '<br>')}</p>` : ''}
+                </div>
+              </div>
+            </body>
+            </html>`;
+            }
+
+            // ---------------------------------------------------------------------------
+            // Daily reminder
+            // ---------------------------------------------------------------------------
+
+            function buildReminderHtml(user, shortDays) {
+              const what = s => s.hours > 0
+                ? `you logged <strong>${s.hours.toFixed(1)} of ${+s.expected.toFixed(1)} hours</strong>`
+                : `you have <strong>no hours logged</strong>`;
+              const body = shortDays.length === 1
+                ? `On <strong>${formatDisplayDate(shortDays[0].date)}</strong> ${what(shortDays[0])} in Time Tracker.
+                    Please add the missing hours today.`
+                : `Some of your recent working days came out short in Time Tracker:
+                    <ul style="margin:8px 0;padding-left:20px">
+                      ${shortDays.map(s => `<li>On <strong>${formatDisplayDate(s.date)}</strong> ${what(s)}</li>`).join('\n          ')}
+                    </ul>
+                    Please add the missing hours today.`;
+              const link = TIMETRACKER_URL
+                ? `<p style="margin:0 0 20px 0"><a href="${escHtml(TIMETRACKER_URL)}" style="color:#0078d4">Open Time Tracker</a></p>`
+                : '';
+
+              return `<!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="margin:0;padding:0;background:#faf9f8;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#323130">
+              <div style="max-width:600px;margin:32px auto;background:white;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.12);overflow:hidden">
+                <div style="padding:24px 28px">
+                  <p style="margin:0 0 16px 0">Hi <strong>${escHtml(user.userName)}</strong>,</p>
+                  <div style="margin:0 0 20px 0">
+                    ${body}
+                  </div>
+                  ${link}
+                  <p style="margin:0;font-size:12px;color:#a19f9d;border-top:1px solid #edebe9;padding-top:16px">
+                    This is an automated daily reminder from Time Tracker.
+                  </p>
+                </div>
+              </div>
+            </body>
+            </html>`;
+            }
+
+            // ---------------------------------------------------------------------------
+            // Main
+            // ---------------------------------------------------------------------------
+
+            /**
+             * The pipeline runs hourly; the script decides whether it's send time.
+             * A schedule matches on its utcDay, or on any of its utcDays (daily reminder).
+             * A schedule without a UTC day/hour (saved by an old settings page) always matches.
+             */
+            function scheduleMatches(label, sched, now) {
+              const days = sched && (sched.utcDays || (sched.utcDay !== undefined ? [sched.utcDay] : null));
+              if (!days || sched.utcHour === undefined) return true;
               const curDay  = now.getUTCDay();
               const curHour = now.getUTCHours();
-              if (curDay !== sched.utcDay || curHour !== sched.utcHour) {
-                console.log(`Not send time. Configured: ${DAY_NAMES[sched.utcDay]} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC. Nothing to do.`);
+              if (!days.includes(curDay) || curHour !== sched.utcHour) {
+                console.log(`${label}: not send time. Configured: ${days.map(d => DAY_NAMES[d].slice(0, 3)).join('/')} ${String(sched.utcHour).padStart(2,'0')}:00 UTC | Now: ${DAY_NAMES[curDay]} ${String(curHour).padStart(2,'0')}:00 UTC.`);
+                return false;
+              }
+              console.log(`${label}: schedule matched — proceeding.`);
+              return true;
+            }
+
+            async function main() {
+              // Validate required env vars
+              const missing = REQUIRED_VARS.filter(v => !process.env[v]);
+              if (missing.length) {
+                console.error('Missing required environment variables:', missing.join(', '));
+                process.exit(1);
+              }
+
+              if (DRY_RUN) console.log('[DRY RUN] No emails will be sent.');
+
+              let { start, end } = getLastWeekRange();
+
+              if (OVERRIDE_WEEK_START) {
+                // Allow testing with any specific week: set override_week_start to a Monday (YYYY-MM-DD)
+                start = new Date(OVERRIDE_WEEK_START + 'T00:00:00');
+                if (isNaN(start.getTime())) {
+                  console.error(`Invalid OVERRIDE_WEEK_START date: "${OVERRIDE_WEEK_START}". Use YYYY-MM-DD format.`);
+                  process.exit(1);
+                }
+                end = new Date(start);
+                end.setDate(start.getDate() + 6);
+                console.log(`[OVERRIDE] Using specified week instead of last week.`);
+              }
+
+              const startStr = toDateStr(start);
+              const endStr   = toDateStr(end);
+              console.log(`Processing week: ${startStr} → ${endStr}`);
+
+              // Load notification config
+              const config = await fetchDocument('notification-config', true);
+              if (config) {
+                config.users = asArray(config.users).map(u => Object.assign({}, u, { daySchedule: u.daySchedule ? asArray(u.daySchedule) : null }));
+                if (config.dailyReminder && config.dailyReminder.utcDays) config.dailyReminder.utcDays = asArray(config.dailyReminder.utcDays);
+              }
+              console.log(`[DEBUG] config.users: ${JSON.stringify((config && config.users) || null)}`);
+              console.log(`[DEBUG] config.schedule: ${JSON.stringify((config && config.schedule) || null)}`);
+              console.log(`[DEBUG] config.managerDigest: ${JSON.stringify((config && config.managerDigest) || null)}`);
+              console.log(`[DEBUG] config.dailyReminder: ${JSON.stringify((config && config.dailyReminder) || null)}`);
+
+              const digestCfg        = (config && config.managerDigest) || {};
+              const digestRecipients = (digestCfg.recipients || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+              const dailyCfg         = (config && config.dailyReminder) || {};
+              let sendPersonal = MAILS === 'all' || MAILS === 'personal';
+              let sendDigest   = (MAILS === 'all' || MAILS === 'digest') && !!digestCfg.enabled && digestRecipients.length > 0;
+              let sendDaily    = (MAILS === 'all' || MAILS === 'daily') && !!dailyCfg.enabled;
+
+              // Schedule checks are skipped for a manual test run: OVERRIDE_WEEK_START for
+              // the weekly summary and digest, OVERRIDE_DAY for the daily reminder.
+              const now = new Date();
+              if (!OVERRIDE_WEEK_START) {
+                sendPersonal = sendPersonal && scheduleMatches('Weekly summary', config && config.schedule, now);
+                sendDigest   = sendDigest   && scheduleMatches('Manager digest', digestCfg, now);
+              }
+              if (!OVERRIDE_DAY) {
+                sendDaily = sendDaily && scheduleMatches('Daily reminder', dailyCfg, now);
+              }
+              if (!sendPersonal && !sendDigest && !sendDaily) {
+                console.log('Nothing to do.');
                 return;
               }
-              console.log('Schedule matched — proceeding.');
+
+              const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
+
+              if (!enabledUsers.length) {
+                console.log('No users have email notifications enabled. Nothing to send.');
+                return;
+              }
+              console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
+
+              const dailyDay  = OVERRIDE_DAY ? new Date(OVERRIDE_DAY + 'T00:00:00') : getPreviousWorkingDay(now);
+              const lookback  = Math.max(1, parseInt(dailyCfg.lookbackDays, 10) || 1);
+              const dailyDays = getWorkingDaysBack(dailyDay, lookback);
+              // The digest and its follow-up reach back the same number of working days as the daily
+              // reminder, counted from the Friday of the digest's week and rounded up to full weeks.
+              // The digest shows TREND_WEEKS to DIGEST_MAX_WEEKS of them; the follow-up covers exactly the look-back.
+              const lookbackFirst = getWorkingDaysBack(addDays(start, 4), lookback)[0];
+              const lookbackWeeks = Math.round((start - new Date(mondayOf(lookbackFirst) + 'T00:00:00')) / (7 * 86400000)) + 1;
+              const weeks     = getTrendWeeks(start, Math.max(TREND_WEEKS, lookbackWeeks));
+              // Load time entries for the relevant month(s)
+              const ranges    = [];
+              if (sendPersonal) ranges.push([start, end]);
+              if (sendDigest)   ranges.push([weeks[0].monday, end]);
+              if (sendDaily)    ranges.push([new Date(dailyDays[0] + 'T00:00:00'), dailyDay]);
+              const monthKeys = getMonthKeysForRange(
+                new Date(Math.min(...ranges.map(r => r[0]))), new Date(Math.max(...ranges.map(r => r[1]))));
+              let allEntries = [];
+              for (const key of monthKeys) {
+                const entries = await fetchDocument(key);
+                if (Array.isArray(entries)) {
+                  allEntries = allEntries.concat(entries);
+                }
+              }
+              console.log(`Loaded ${allEntries.length} total entries across ${monthKeys.length} month(s).`);
+
+              // Filter to the exact week
+              const weekEntries = allEntries.filter(e => e.date >= startStr && e.date <= endStr);
+              console.log(`${weekEntries.length} entries fall within the week range.`);
+
+              // Group by userId
+              const byUser = {};
+              weekEntries.forEach(e => {
+                if (!byUser[e.userId]) byUser[e.userId] = [];
+                byUser[e.userId].push(e);
+              });
+
+              // Set up SMTP transport (30 s timeouts, IPv4 only — IPv6 may be unreachable on pipeline agents)
+              const transportOptions = {
+                host: SMTP_HOST,
+                port: SMTP_PORT,
+                secure: SMTP_SECURE,
+                ignoreTLS: SMTP_IGNORE_TLS,
+                family: 4,
+                connectionTimeout: 60000,
+                greetingTimeout:   60000,
+                socketTimeout:     120000,
+              };
+              if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
+              const transporter = nodemailer.createTransport(transportOptions);
+
+              // Pre-build all mail objects so the retry loop only deals with transport errors.
+              const personalMails = !sendPersonal ? [] : enabledUsers.map(user => {
+                const entries = byUser[user.userId] || [];
+                const days = [];
+                for (let i = 0; i < 7; i++) {
+                  const d = new Date(start);
+                  d.setDate(start.getDate() + i);
+                  const dateStr = toDateStr(d);
+                  const dayEntries = entries.filter(e => e.date === dateStr);
+                  const hours = dayEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0);
+                  days.push({ dayName: DAY_NAMES[d.getDay()], date: dateStr, hours });
+                }
+                const total  = days.reduce((s, d) => s + d.hours, 0);
+                const ccList = (user.cc || '').split(',').map(s => s.trim()).filter(Boolean);
+                return {
+                  user, total,
+                  mailOptions: {
+                    from:    SMTP_FROM,
+                    to:      user.userEmail,
+                    cc:      ccList.length ? ccList.join(', ') : undefined,
+                    subject: `Weekly Hours Summary: ${startStr} – ${endStr}`,
+                    html:    buildEmailHtml(user, days, startStr, endStr),
+                    // High importance (Outlook's red "!") only when the week fell short of the target
+                    priority: user.targetHours > 0 && total < user.targetHours ? 'high' : 'normal',
+                  }
+                };
+              });
+
+              const mails = personalMails;
+              if (sendDigest) {
+                const settings       = (await fetchDocument('timetracker_settings')) || {};
+                const editWindowDays = parseInt(settings.editWindowDays, 10);
+                const editCutoff     = isNaN(editWindowDays) || editWindowDays < 0 ? null : toDateStr(addDays(new Date(), -editWindowDays));
+                const rows          = buildDigestRows(enabledUsers, allEntries, weeks);
+                // The digest table shows only the newest DIGEST_MAX_WEEKS; the follow-up below uses all weeks
+                const shown         = Math.min(weeks.length, DIGEST_MAX_WEEKS);
+                const digestRows    = rows.map(r => ({ ...r, totals: r.totals.slice(-shown) }));
+                for (const r of digestRows) {
+                  console.log(`Digest: ${r.user.userName} — ${r.totals.map(t => t.toFixed(1)).join(' / ')} h` +
+                              (r.missing.length ? `  | no hours: ${r.missing.join(', ')}` : ''));
+                }
+                mails.push({
+                  total: digestRows.reduce((s, r) => s + r.totals[r.totals.length - 1], 0),
+                  mailOptions: {
+                    from:    SMTP_FROM,
+                    to:      digestRecipients.join(', '),
+                    subject: `Team Hours Digest: ${startStr} – ${endStr}`,
+                    html:    buildDigestHtml(digestRows, weeks.slice(-shown), editCutoff, editWindowDays),
+                  }
+                });
+
+                // Firm follow-up to everyone with a short week within the daily reminder's look-back
+                // (not the edit window: a week that can't be fixed anymore was still done wrong).
+                // Always sent when short: planned holidays are logged ahead, so a gap means sick
+                // leave or missing hours.
+                if (digestCfg.followUp) {
+                  const followTo = (digestCfg.followUpAddress || '').trim();
+                  for (const r of rows) {
+                    const target    = r.user.targetHours;
+                    const openShort = weeks.map((_, i) => i)
+                      .filter(i => i >= weeks.length - lookbackWeeks && target > 0 && r.totals[i] < target);
+                    if (!openShort.length) continue;
+                    const weekNums = openShort.map(i => isoWeek(weeks[i].monday));
+                    console.log(`Follow-up: ${r.user.userName} — ` +
+                                openShort.map(i => `wk ${isoWeek(weeks[i].monday)} ${r.totals[i].toFixed(1)}`).join(', ') + ` of ${target} h`);
+                    mails.push({
+                      total: openShort.reduce((s, i) => s + r.totals[i], 0),
+                      mailOptions: {
+                        from:     SMTP_FROM,
+                        to:       r.user.userEmail,
+                        bcc:      followTo || undefined,
+                        replyTo:  followTo || undefined,
+                        subject:  `Action required: your hours for ${weekNums.length === 1 ? 'week' : 'weeks'} ` +
+                                  `${weekNums.length === 1 ? weekNums[0] : weekNums.slice(0, -1).join(', ') + ' and ' + weekNums[weekNums.length - 1]} are incomplete`,
+                        html:     buildFollowUpHtml(r, weeks, openShort, (digestCfg.followUpSignature || '').trim()),
+                        priority: 'high',
+                      }
+                    });
+                  }
+                }
+              }
+
+              if (sendDaily) {
+                const logged = {}; // date -> userId -> hours
+                allEntries.filter(e => dailyDays.includes(e.date)).forEach(e => {
+                  const day = logged[e.date] = logged[e.date] || {};
+                  day[e.userId] = (day[e.userId] || 0) + (Number(e.hours) || 0);
+                });
+                const checkDays = dailyDays.filter(dateStr => {
+                  // Nobody logging anything means a public holiday or company day off, not a team-wide lapse
+                  if (!enabledUsers.some(u => (logged[dateStr] || {})[u.userId] > 0)) {
+                    console.log(`Daily reminder: nobody logged hours on ${dateStr} — treating it as a day off.`);
+                    return false;
+                  }
+                  return true;
+                });
+                console.log(`Daily reminder: checking ${checkDays.join(', ') || 'no days'}.`);
+                for (const user of enabledUsers) {
+                  const days = checkDays.map(dateStr => ({ date: dateStr, hours: (logged[dateStr] || {})[user.userId] || 0, expected: dailyExpectation(user, dateStr) }));
+                  // Extra hours on one day make up for a short day in the same week (7 + 9 = 16):
+                  // a week whose checked days add up to what's expected gets no reminder.
+                  const balance = {}; // week's Monday -> logged minus expected over its checked days
+                  days.filter(s => s.expected !== null).forEach(s => {
+                    const w = mondayOf(s.date);
+                    balance[w] = (balance[w] || 0) + s.hours - s.expected;
+                  });
+                  const shortDays = days.filter(s => isShortDay(user, s.date, s.hours) && !(balance[mondayOf(s.date)] >= -0.001));
+                  if (!shortDays.length) continue;
+                  console.log(`Daily reminder: ${user.userName} — ` + shortDays.map(s => `${s.date} ${s.hours.toFixed(1)} h` +
+                              (s.expected !== null ? ` (expected ${+s.expected.toFixed(1)})` : '')).join(', '));
+                  mails.push({
+                    total: shortDays.reduce((sum, s) => sum + s.hours, 0),
+                    mailOptions: {
+                      from:    SMTP_FROM,
+                      to:      user.userEmail,
+                      subject: shortDays.length === 1
+                        ? `Time Tracker: hours missing for ${formatDisplayDate(shortDays[0].date)}`
+                        : `Time Tracker: hours missing for ${shortDays.length} days`,
+                      html:    buildReminderHtml(user, shortDays),
+                      priority: 'high',
+                    }
+                  });
+                }
+              }
+
+              if (DRY_RUN) {
+                for (const { total, mailOptions } of mails) {
+                  console.log(`[DRY RUN] → ${mailOptions.to}${mailOptions.cc ? '  CC: ' + mailOptions.cc : ''}${mailOptions.bcc ? '  BCC: ' + mailOptions.bcc : ''}  |  Total: ${total.toFixed(1)} h`);
+                }
+                console.log(`Done (dry run). Would send: ${mails.length}.`);
+                return;
+              }
+
+              const MAX_ROUNDS    = 12;
+              const RETRY_DELAY   = 5 * 60 * 1000; // 5 minutes
+              let sent = 0, failed = 0;
+              let pending = [...mails];
+
+              for (let round = 1; round <= MAX_ROUNDS && pending.length > 0; round++) {
+                if (round > 1) {
+                  console.log(`Retrying ${pending.length} failed email(s) — round ${round}/${MAX_ROUNDS}, waiting 5 min…`);
+                  await new Promise(r => setTimeout(r, RETRY_DELAY));
+                }
+                const stillFailed = [];
+                for (const item of pending) {
+                  try {
+                    await transporter.sendMail(item.mailOptions);
+                    console.log(`Sent  → ${item.mailOptions.to}${item.mailOptions.cc ? '  CC: ' + item.mailOptions.cc : ''}${item.mailOptions.bcc ? '  BCC: ' + item.mailOptions.bcc : ''}`);
+                    sent++;
+                  } catch (err) {
+                    console.warn(`Round ${round} failed → ${item.mailOptions.to}: ${err.message}`);
+                    stillFailed.push(item);
+                  }
+                }
+                pending = stillFailed;
+              }
+
+              failed = pending.length;
+              for (const item of pending) {
+                console.error(`Giving up → ${item.mailOptions.to} after ${MAX_ROUNDS} rounds.`);
+              }
+
+              console.log(`Done. Sent: ${sent}, Failed: ${failed}.`);
+              if (failed > 0) process.exit(1);
             }
-          }
 
-          const enabledUsers = ((config && config.users) || []).filter(u => u.emailEnabled);
-          if (!enabledUsers.length) { console.log('No users have notifications enabled.'); return; }
-          console.log(`${enabledUsers.length} user(s) with notifications enabled.`);
+            const globalTimeout = setTimeout(() => {
+              console.error('Fatal: script timed out after 65 minutes.');
+              process.exit(1);
+            }, 65 * 60 * 1000);
+            globalTimeout.unref();
 
-          const monthKeys = getMonthKeysForRange(start, end);
-          let allEntries = [];
-          for (const key of monthKeys) {
-            const entries = await fetchDocument(key);
-            if (Array.isArray(entries)) allEntries = allEntries.concat(entries);
-          }
-          const weekEntries = allEntries.filter(e => e.date >= startStr && e.date <= endStr);
-          console.log(`${weekEntries.length} entries in range.`);
-
-          const byUser = {};
-          weekEntries.forEach(e => { if (!byUser[e.userId]) byUser[e.userId] = []; byUser[e.userId].push(e); });
-
-          const transportOptions = {
-            host: SMTP_HOST,
-            port: SMTP_PORT,
-            secure: SMTP_SECURE,
-            family: 4,
-            connectionTimeout: 60000,
-            greetingTimeout:   60000,
-            socketTimeout:     120000,
-          };
-          if (SMTP_USER) transportOptions.auth = { user: SMTP_USER, pass: SMTP_PASS };
-          const transporter = nodemailer.createTransport(transportOptions);
-
-          let sent = 0, failed = 0;
-          for (const user of enabledUsers) {
-            const entries = byUser[user.userId] || [];
-            const days = [];
-            for (let i = 0; i < 7; i++) {
-              const d = new Date(start); d.setDate(start.getDate() + i);
-              const dateStr = toDateStr(d);
-              const hours = entries.filter(e => e.date === dateStr).reduce((s, e) => s + (Number(e.hours) || 0), 0);
-              days.push({ dayName: DAY_NAMES[d.getDay()], date: dateStr, hours });
-            }
-            const ccList = (user.cc || '').split(',').map(s => s.trim()).filter(Boolean);
-            if (DRY_RUN) {
-              console.log(`[DRY RUN] -> ${user.userEmail}${ccList.length ? '  CC: '+ccList.join(', ') : ''}  Total: ${days.reduce((s,d)=>s+d.hours,0).toFixed(1)} h`);
-              days.forEach(d => console.log(`           ${d.dayName.padEnd(10)} ${d.date}  ${d.hours.toFixed(1)} h`));
-              sent++; continue;
-            }
-            try {
-              await transporter.sendMail({ from: SMTP_FROM, to: user.userEmail, cc: ccList.length ? ccList.join(', ') : undefined, subject: `Weekly Hours Summary: ${startStr} - ${endStr}`, html: buildEmailHtml(user, days, startStr, endStr) });
-              console.log(`Sent  -> ${user.userEmail}`);
-              sent++;
-            } catch(e) { console.error(`Failed -> ${user.userEmail}: ${e.message}`); failed++; }
-          }
-          console.log(`Done. Sent: ${sent}, Failed: ${failed}.`);
-          if (failed > 0) process.exit(1);
-        }
-
-        const globalTimeout = setTimeout(() => { console.error('Fatal: script timed out after 10 minutes. Check SMTP_HOST connectivity.'); process.exit(1); }, 600000);
-        globalTimeout.unref();
-        main().catch(err => { console.error('Fatal:', err); process.exit(1); });
-        '@
-        $script | Out-File -FilePath send-weekly-summary.js -Encoding utf8
-
-  - script: node send-weekly-summary.js
-    displayName: Send weekly hour summary emails
-    env:
-      AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
-      AZDO_PAT:               $(AZDO_PAT)
-      AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
-      AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
-      SMTP_HOST:              $(SMTP_HOST)
-      SMTP_PORT:              $(SMTP_PORT)
-      SMTP_FROM:              $(SMTP_FROM)
-      SMTP_SECURE:            $(SMTP_SECURE)
-      SMTP_USER:              $(SMTP_USER)
-      SMTP_PASS:              $(SMTP_PASS)
-      OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
-      DRY_RUN:                ${{ parameters.dry_run }}
+            main().catch(err => {
+              console.error('Fatal error:', err);
+              process.exit(1);
+            });
+            '@
+            $script | Out-File -FilePath send-weekly-summary.js -Encoding utf8
+    
+      - script: node send-weekly-summary.js
+        displayName: Send weekly hour summary emails
+        env:
+          AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
+          AZDO_PAT:               $(AZDO_PAT)
+          AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
+          AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
+          SMTP_HOST:              $(SMTP_HOST)
+          SMTP_PORT:              $(SMTP_PORT)
+          SMTP_FROM:              $(SMTP_FROM)
+          SMTP_SECURE:            $(SMTP_SECURE)
+          SMTP_IGNORE_TLS:        $(SMTP_IGNORE_TLS)
+          SMTP_USER:              $(SMTP_USER)
+          SMTP_PASS:              $(SMTP_PASS)
+          TIMETRACKER_URL:        $(TIMETRACKER_URL)
+          OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
+          DRY_RUN:                ${{ parameters.dry_run }}
+          OVERRIDE_DAY:           '${{ parameters.override_day }}'
+          MAILS:                  ${{ parameters.mails }}

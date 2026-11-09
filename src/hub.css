@@ -1,0 +1,40 @@
+/* Hub shell: tab bar on top, the active view's iframe fills the rest */
+html, body {
+  height: 100vh;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 0 20px;
+}
+
+.hub-default {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hub-default:hover { color: var(--accent); }
+.hub-default.is-default { cursor: default; color: var(--accent); }
+
+/* Each view's page brings its own 20px padding, so the frames go edge to edge */
+.hub-frames {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  margin: 0 -20px;
+}
+
+.hub-frame {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.hub-frame.active { display: block; }

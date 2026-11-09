@@ -144,18 +144,20 @@
 
     // Count active assigned items with zero hours logged this week.
     function countUntracked(projectName, currentUser) {
-      return new Promise(function (resolve, reject) {
-        VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function (VSS_Service, WIT_Client) {
-          var client = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
-          var notIn = EXCLUDED_STATES.map(function (s) { return "'" + s + "'"; }).join(",");
-          var wiql = {
-            query: "SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me " +
-                   "AND [System.State] NOT IN (" + notIn + ")"
-          };
-          client.queryByWiql(wiql, { project: projectName }, false, 200).then(function (result) {
-            var ids = (result.workItems || []).map(function (w) { return w.id; });
-            resolve(ids);
-          }, reject);
+      return VSS.getService(VSS.ServiceIds.ExtensionData).then(TC.getSettings).then(function (settings) {
+        return new Promise(function (resolve, reject) {
+          VSS.require(["VSS/Service", "TFS/WorkItemTracking/RestClient"], function (VSS_Service, WIT_Client) {
+            var client = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+            var notIn = EXCLUDED_STATES.map(function (s) { return "'" + s + "'"; }).join(",");
+            var wiql = {
+              query: "SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me " +
+                     "AND [System.State] NOT IN (" + notIn + ")" + TC.epicExclusionWiql(settings)
+            };
+            client.queryByWiql(wiql, { project: projectName }, false, 200).then(function (result) {
+              var ids = (result.workItems || []).map(function (w) { return w.id; });
+              resolve(ids);
+            }, reject);
+          });
         });
       }).then(function (assignedIds) {
         if (!assignedIds.length) return 0;

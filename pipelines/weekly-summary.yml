@@ -3,6 +3,9 @@
 # Runs every hour. The script reads the send day + time from Notification Settings
 # in the extension and exits immediately if it is not the configured send hour.
 # Change the schedule entirely from the Notification Settings page — no YAML edits needed.
+# The same run also sends the Manager Digest (one team overview with a 4-week
+# trend) on its own day + time, and the Daily Reminder (weekday mornings, to
+# people whose previous working day came out short). All set in Notification Settings.
 #
 # ── Pipeline variables (set in the pipeline UI, mark secrets as Secret) ──────
 #   AZDO_SERVER_URL    http://devops.yourcompany.com/DefaultCollection
@@ -13,12 +16,16 @@
 #   SMTP_FROM          timetracker@yourcompany.com
 #   SMTP_PORT          25                               (optional)
 #   SMTP_SECURE        false                            (optional, true for TLS)
+#   SMTP_IGNORE_TLS    true                             (optional, skip STARTTLS — use when server cert is expired)
 #   SMTP_USER                                          (optional, for SMTP auth)
 #   SMTP_PASS                                          (optional)               [SECRET]
+#   TIMETRACKER_URL    Link added to the daily reminder (optional)
 #
 # ── Runtime parameters (set when triggering manually for testing) ─────────────
 #   override_week_start   Monday date YYYY-MM-DD  — use any past week for testing
 #   dry_run               true                    — log output, do NOT send emails
+#   override_day          YYYY-MM-DD              — send the daily reminder for this day now
+#   mails                 all | personal | digest | daily — limit a test run to one kind of mail
 
 parameters:
   - name: override_week_start
@@ -29,6 +36,15 @@ parameters:
     type: boolean
     default: false
     displayName: 'Dry run (log only, do not send emails)'
+  - name: override_day
+    type: string
+    default: 'none'
+    displayName: 'Daily reminder: check this day now (YYYY-MM-DD, leave as none for the schedule)'
+  - name: mails
+    type: string
+    default: all
+    values: [all, personal, digest, daily]
+    displayName: 'Which mails (for test runs: just the personal mails, the manager digest or the daily reminder)'
 
 schedules:
   - cron: "0 * * * *"
@@ -41,32 +57,40 @@ schedules:
 
 trigger: none
 
-pool:
-  name: Default   # your self-hosted agent pool
+jobs:
+  - job: SendWeeklySummary
+    timeoutInMinutes: 70
+    pool:
+      name: Default
+      demands:
+        - Agent.OS -equals Windows_NT
+    steps:
+      - task: NodeTool@0
+        displayName: Use Node.js 16
+        inputs:
+          versionSpec: '16.x'
 
-steps:
-  - task: NodeTool@0
-    displayName: Use Node.js 16
-    inputs:
-      versionSpec: '16.x'
+      - script: npm install --production
+        displayName: Install script dependencies
+        workingDirectory: $(Build.SourcesDirectory)/scripts
 
-  - script: npm install --production
-    displayName: Install script dependencies
-    workingDirectory: $(Build.SourcesDirectory)/scripts
-
-  - script: node send-weekly-summary.js
-    displayName: Send weekly hour summary emails
-    workingDirectory: $(Build.SourcesDirectory)/scripts
-    env:
-      AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
-      AZDO_PAT:               $(AZDO_PAT)
-      AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
-      AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
-      SMTP_HOST:              $(SMTP_HOST)
-      SMTP_PORT:              $(SMTP_PORT)
-      SMTP_FROM:              $(SMTP_FROM)
-      SMTP_SECURE:            $(SMTP_SECURE)
-      SMTP_USER:              $(SMTP_USER)
-      SMTP_PASS:              $(SMTP_PASS)
-      OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
-      DRY_RUN:                ${{ parameters.dry_run }}
+      - script: node send-weekly-summary.js
+        displayName: Send weekly hour summary emails
+        workingDirectory: $(Build.SourcesDirectory)/scripts
+        env:
+          AZDO_SERVER_URL:        $(AZDO_SERVER_URL)
+          AZDO_PAT:               $(AZDO_PAT)
+          AZDO_PUBLISHER:         $(AZDO_PUBLISHER)
+          AZDO_EXTENSION_ID:      $(AZDO_EXTENSION_ID)
+          SMTP_HOST:              $(SMTP_HOST)
+          SMTP_PORT:              $(SMTP_PORT)
+          SMTP_FROM:              $(SMTP_FROM)
+          SMTP_SECURE:            $(SMTP_SECURE)
+          SMTP_IGNORE_TLS:        $(SMTP_IGNORE_TLS)
+          SMTP_USER:              $(SMTP_USER)
+          SMTP_PASS:              $(SMTP_PASS)
+          TIMETRACKER_URL:        $(TIMETRACKER_URL)
+          OVERRIDE_WEEK_START:    '${{ parameters.override_week_start }}'
+          DRY_RUN:                ${{ parameters.dry_run }}
+          OVERRIDE_DAY:           '${{ parameters.override_day }}'
+          MAILS:                  ${{ parameters.mails }}

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Time Tracker</title>
+  <!-- Theme follows the Azure DevOps host (see applyDevOpsTheme); default is light, never the OS setting -->
+  <script src="../lib/VSS.SDK.min.js"></script>
+  <script src="time-core.js"></script>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="hub.css">
+</head>
+<body>
+
+  <div class="hub-nav" id="hubNav">
+    <span id="defaultToggle" class="hub-default" style="display:none"></span>
+  </div>
+  <div id="hubFrames" class="hub-frames"></div>
+
+  <script>
+    // Single Boards hub: My Time, Time Reports and Settings each live in a
+    // child iframe that is created on first visit and then kept alive, so
+    // switching tabs is instant and every view keeps its filters. Children
+    // borrow this page's VSS connection (see the hub-shell shim in time-core.js).
+    // The host URL hash is "view=<id>" plus the active view's own filters.
+    var VIEWS = [
+      { id: 'my-time',     label: 'My Time',      file: 'my-time.html' },
+      { id: 'time-report', label: 'Time Reports', file: 'time-report.html' },
+      // Hidden unless the admin check passes; settings.html still does its own check
+      { id: 'settings',    label: 'Settings',     file: 'settings.html', adminOnly: true }
+    ];
+    var DEFAULT_VIEW_KEY = 'hub-default-view';
+
+    var hostNav     = null;
+    var dataService = null;
+    var activeId    = null;
+    var defaultId   = 'my-time';
+    var pageHashes  = {};   // file -> that view's own hash (without "view=")
+    var frames      = {};   // id -> iframe
+
+    function viewById(id) {
+      for (var i = 0; i < VIEWS.length; i++) if (VIEWS[i].id === id) return VIEWS[i];
+      return null;
+    }
+    function viewByFile(file) {
+      for (var i = 0; i < VIEWS.length; i++) if (VIEWS[i].file === file) return VIEWS[i];
+      return null;
+    }
+
+    window.TimeTrackerHub = {
+      // Stand-in for the VSS Navigation service, handed to each child page
+      navigationFor: function(file) {
+        return {
+          getHash: function() { return Promise.resolve(pageHashes[file] || ''); },
+          setHash: function(hash) {
+            pageHashes[file] = hash || '';
+            var view = viewByFile(file);
+            if (view && view.id === activeId) writeHostHash();
+          }
+        };
+      }
+    };
+
+    function writeHostHash() {
+      if (!hostNav || !activeId) return;
+      var own = pageHashes[viewById(activeId).file];
+      var hash = 'view=' + activeId + (own ? '&' + own : '');
+      // Replace rather than push: the tabs don't react to Back, so history entries would only confuse
+      try { (hostNav.replaceHash || hostNav.setHash).call(hostNav, hash); } catch(e) {}
+    }
+
+    function renderNav() {
+      var nav = document.getElementById('hubNav');
+      var toggle = document.getElementById('defaultToggle');
+      VIEWS.forEach(function(view) {
+        var item = document.createElement('div');
+        item.className = 'hub-nav-item';
+        item.id = 'nav-' + view.id;
+        item.textContent = view.label;
+        if (view.adminOnly) item.style.display = 'none';
+        item.onclick = function() { showView(view.id); };
+        nav.insertBefore(item, toggle);
+      });
+      toggle.onclick = function() {
+        if (activeId === defaultId || !dataService) return;
+        defaultId = activeId;
+        renderDefaultToggle();
+        dataService.setValue(DEFAULT_VIEW_KEY, defaultId, { scopeType: 'User' });
+      };
+    }
+
+    function renderDefaultToggle() {
+      var toggle = document.getElementById('defaultToggle');
+      var isDefault = activeId === defaultId;
+      toggle.textContent = isDefault ? '★ Your default tab' : '☆ Make this my default tab';
+      toggle.classList.toggle('is-default', isDefault);
+      toggle.style.display = '';
+    }
+
+    function showView(id) {
+      var view = viewById(id);
+      if (!frames[id]) {
+        var frame = document.createElement('iframe');
+        frame.className = 'hub-frame';
+        frame.src = view.file + window.location.search;
+        document.getElementById('hubFrames').appendChild(frame);
+        frames[id] = frame;
+      }
+      activeId = id;
+      VIEWS.forEach(function(v) {
+        document.getElementById('nav-' + v.id).classList.toggle('active', v.id === id);
+        if (frames[v.id]) frames[v.id].classList.toggle('active', v.id === id);
+      });
+      renderDefaultToggle();
+      writeHostHash();
+    }
+
+    // Splits "view=x&a=1&b=2" into the view id and the rest (the page's own hash)
+    function parseHostHash(hash) {
+      var out = { view: null, rest: [] };
+      (hash || '').replace(/^#/, '').split('&').forEach(function(pair) {
+        if (!pair) return;
+        if (pair.indexOf('view=') === 0) out.view = decodeURIComponent(pair.slice(5));
+        else out.rest.push(pair);
+      });
+      return out;
+    }
+
+    function applyDevOpsTheme() {
+      function applyIfExplicit(t) {
+        if (!t) return false;
+        var theme = String(t).toLowerCase();
+        if (theme.indexOf('dark') !== -1) {
+          document.documentElement.classList.add('dark');
+          return true;
+        }
+        if (theme === 'default' || theme === 'light') {
+          document.documentElement.classList.remove('dark');
+          return true;
+        }
+        return false;
+      }
+      var t = '';
+      try { if (typeof VSS.getPageContext === 'function') t = (VSS.getPageContext().globalization.theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window.__vssPageContext) t = ((window.__vssPageContext.globalization || {}).theme || '').toLowerCase(); } catch(e) {}
+      try { if (!t && window._pageContext)     t = ((window._pageContext.globalization     || {}).theme || '').toLowerCase(); } catch(e) {}
+      if (applyIfExplicit(t)) return;
+      // On-premise Azure DevOps Server is same-origin — read the host page background
+      // as the ground truth for the active theme. Cross-origin throws; caught silently.
+      try {
+        if (window.top !== window) {
+          var rgb = window.top.getComputedStyle(window.top.document.body).backgroundColor;
+          var m = rgb.match(/\d+/g);
+          if (m && m.length >= 3) {
+            var lum = (+m[0] * 299 + +m[1] * 587 + +m[2] * 114) / 1000;
+            if (lum < 128) document.documentElement.classList.add('dark');
+            else           document.documentElement.classList.remove('dark');
+            return;
+          }
+        }
+      } catch(e) {}
+      try {
+        VSS.require(['VSS/Context'], function(Ctx) {
+          try { applyIfExplicit(((Ctx.getPageContext().globalization || {}).theme || '').toLowerCase()); } catch(e) {}
+        });
+      } catch(e) {}
+    }
+
+    function initializeExtension() {
+      if (typeof VSS === 'undefined') { setTimeout(initializeExtension, 50); return; }
+      VSS.init({ explicitNotifyLoaded: true, usePlatformScripts: true });
+      applyDevOpsTheme();
+      renderNav();
+      VSS.ready(function() {
+        VSS.notifyLoadSucceeded();
+        var isAdmin = TimeCore.checkIsAdmin().then(function(admin) {
+          if (admin) document.getElementById('nav-settings').style.display = '';
+          return admin;
+        });
+        var ready = [
+          VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
+            hostNav = nav;
+            return nav.getHash();
+          }),
+          VSS.getService(VSS.ServiceIds.ExtensionData).then(function(ds) {
+            dataService = ds;
+            return ds.getValue(DEFAULT_VIEW_KEY, { scopeType: 'User' });
+          })
+        ].map(function(p) { return Promise.resolve(p).catch(function() { return null; }); });
+
+        Promise.all(ready).then(function(results) {
+          var fromHash = parseHostHash(results[0]);
+          if (viewById(results[1])) defaultId = results[1];
+          var id = viewById(fromHash.view) ? fromHash.view : defaultId;
+          if (fromHash.view === id) pageHashes[viewById(id).file] = fromHash.rest.join('&');
+          if (!viewById(id).adminOnly) { showView(id); return; }
+          // Settings as start view: only once the admin check confirms
+          isAdmin.then(function(admin) { showView(admin ? id : 'my-time'); });
+        });
+      });
+    }
+
+    initializeExtension();
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
    time-core.js — shared storage + entry logic
 
    Loaded as a plain <script> (no build step), exposes window.TimeCore.
@@ -11,8 +11,8 @@
 
   var STORAGE_KEY_PREFIX = "timetracker_";
 
-  // Possible field reference names (vary by where the field was created
-  // in Azure DevOps). Kept in sync with time-entry.html.
+  // Default reference names tried when no field is configured in
+  // Settings (they vary by where the field was created in Azure DevOps).
   var CLIENT_FIELD_REFS = ["Custom.Client", "Custom.Planning_Client", "Planning.Client"];
   var PROJECT_FIELD_REFS = ["Custom.Project", "Custom.Planning_Project", "Planning.Project"];
 
@@ -21,6 +21,126 @@
       if (fields[refNames[i]]) return fields[refNames[i]];
     }
     return defaultValue;
+  }
+
+  // A field picked in Settings (projectField / clientField) replaces the
+  // default list entirely.
+  function fieldRefsFromSettings(settings) {
+    return {
+      project: settings.projectField ? [settings.projectField] : PROJECT_FIELD_REFS,
+      client: settings.clientField ? [settings.clientField] : CLIENT_FIELD_REFS
+    };
+  }
+
+  // Project/client for a work item: its own value, else the nearest
+  // ancestor's (`anc` is a resolveAncestry() result). Shared by entry
+  // creation and the report's Re-sync so both inherit identically.
+  function resolveProjectClient(workItem, anc, refs) {
+    var out = {
+      project: getFieldValue(workItem.fields, refs.project, "(No Project)"),
+      projectInheritedFrom: null,
+      client: getFieldValue(workItem.fields, refs.client, "(No Client)"),
+      clientInheritedFrom: null
+    };
+    anc.ancestors.forEach(function (item) {
+      var inheritedFrom = item.id === anc.epicId ? "epic" : "parent";
+      var itemProject = getFieldValue(item.fields, refs.project, null);
+      if (out.project === "(No Project)" && itemProject) {
+        out.project = itemProject;
+        out.projectInheritedFrom = inheritedFrom;
+      }
+      var itemClient = getFieldValue(item.fields, refs.client, null);
+      if (out.client === "(No Client)" && itemClient) {
+        out.client = itemClient;
+        out.clientInheritedFrom = inheritedFrom;
+      }
+    });
+    return out;
+  }
+
+  // ---- Embedded in the hub shell -----------------------------------------
+  // hub.html is the single Boards hub. It calls VSS.init once and shows
+  // My Time, Time Reports and Settings in same-origin child iframes, so
+  // switching tabs doesn't reload anything. A child page can't handshake
+  // with Azure DevOps itself (its parent is the shell, not the host), so
+  // here VSS is swapped for the shell's already-initialised SDK:
+  //  - init / notifyLoadSucceeded are no-ops (the shell did both);
+  //  - the Navigation service is replaced by one scoped to this page, so
+  //    each page's filter hash lives next to "view=..." in the host URL.
+  var hubShell = null;
+  try { if (global.parent !== global && global.parent.TimeTrackerHub) hubShell = global.parent.TimeTrackerHub; } catch (e) {}
+  if (hubShell) {
+    var hostVSS = global.parent.VSS;
+    var pageFile = global.location.pathname.split("/").pop();
+    var embeddedVSS = {};
+    Object.keys(hostVSS).forEach(function (k) {
+      embeddedVSS[k] = typeof hostVSS[k] === "function" ? hostVSS[k].bind(hostVSS) : hostVSS[k];
+    });
+    embeddedVSS.init = function () {};
+    embeddedVSS.notifyLoadSucceeded = function () {};
+    embeddedVSS.getService = function (serviceId) {
+      if (serviceId === hostVSS.ServiceIds.Navigation) return Promise.resolve(hubShell.navigationFor(pageFile));
+      return hostVSS.getService.apply(hostVSS, arguments);
+    };
+    global.VSS = embeddedVSS;
+  }
+
+  function checkIsAdmin() {
+    var ctx = VSS.getWebContext();
+    var base = ctx.collection.uri.replace(/\/$/, '');
+    var userId = ctx.user.id;
+    var projectName = ctx.project.name;
+    var headers = { 'Accept': 'application/json' };
+
+    function normalizeId(id) {
+      return String(id || '').toLowerCase().replace(/[{}]/g, '');
+    }
+
+    var groupUrl = base + '/_apis/Identities' +
+      '?searchFilter=General' +
+      '&filterValue=' + encodeURIComponent('[' + projectName + ']\\Project Administrators') +
+      '&queryMembership=Expanded' +
+      '&api-version=5.1';
+
+    var userUrl = base + '/_apis/Identities' +
+      '?identityIds=' + encodeURIComponent(userId) +
+      '&api-version=5.1';
+
+    return Promise.all([
+      fetch(groupUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('Group lookup HTTP ' + r.status);
+        return r.json();
+      }),
+      fetch(userUrl, { credentials: 'include', headers: headers }).then(function(r) {
+        if (!r.ok) throw new Error('User lookup HTTP ' + r.status);
+        return r.json();
+      })
+    ]).then(function(results) {
+      var groupData = results[0], userData = results[1];
+      if (!groupData || !groupData.value || !groupData.value.length) throw new Error('Group not found');
+      if (!userData  || !userData.value  || !userData.value.length)  throw new Error('User identity not found');
+
+      var members        = groupData.value[0].members || groupData.value[0].memberIds || [];
+      var userDescriptor = userData.value[0].descriptor || '';
+      var normUserId     = normalizeId(userId);
+
+      return members.some(function(m) {
+        var id = typeof m === 'string' ? m : ((m && m.id) || '');
+        return normalizeId(id) === normUserId ||
+               id.toLowerCase() === userDescriptor.toLowerCase();
+      });
+    }).catch(function() { return false; });
+  }
+
+  function mergeTags(existing, additional) {
+    if (!additional) return existing;
+    if (!existing) return additional;
+    var seen = existing.split(";").map(function(t) { return t.trim(); }).filter(Boolean);
+    additional.split(";").forEach(function(t) {
+      var trimmed = t.trim();
+      if (trimmed && seen.indexOf(trimmed) === -1) seen.push(trimmed);
+    });
+    return seen.join("; ");
   }
 
   // ---- Date helpers ------------------------------------------------
@@ -131,41 +251,457 @@
     });
   }
 
-  function saveEntry(dataService, entry) {
+  function saveEntry(dataService, entry, witClient) {
     var key = getStorageKeyForDate(entry.date);
-    return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
+    return checkEditWindow(dataService, [entry.date]).then(function () {
+      return dataService.getValue(key, { scopeType: "Default" });
+    }).then(function (data) {
       var monthEntries = data || [];
       monthEntries.push(entry);
-      return dataService.setValue(key, monthEntries, { scopeType: "Default" });
+      return dataService.setValue(key, monthEntries, { scopeType: "Default" }).then(function (result) {
+        recalcInBackground(dataService, witClient, [entry]);
+        return result;
+      });
     });
   }
 
-  function deleteEntryById(dataService, entryId, entryDate) {
+  function deleteEntryById(dataService, entryId, entryDate, witClient) {
     var key = getStorageKeyForDate(entryDate);
-    return dataService.getValue(key, { scopeType: "Default" }).then(function (data) {
+    return checkEditWindow(dataService, [entryDate]).then(function () {
+      return dataService.getValue(key, { scopeType: "Default" });
+    }).then(function (data) {
       if (!data || data.length === 0) {
         throw new Error("No entries found for this month — aborting delete to prevent data loss");
       }
+      var removed = data.find(function (e) { return e.id === entryId; });
       var filtered = data.filter(function (e) { return e.id !== entryId; });
-      return dataService.setValue(key, filtered, { scopeType: "Default" });
+      return dataService.setValue(key, filtered, { scopeType: "Default" }).then(function (result) {
+        recalcInBackground(dataService, witClient, [removed]);
+        return result;
+      });
+    });
+  }
+
+  // ---- Total-hours field propagation --------------------------------
+  // Admins can configure a work item field (Settings page) that should
+  // hold the sum of every hour logged on that item AND cascading up
+  // through its ancestor chain — so a Feature/Epic's field reflects its
+  // own direct hours plus every descendant's, no matter how deep.
+  //
+  // Every add/edit/delete triggers a FULL recomputation from the source
+  // entries — never an incremental delta. A running delta has two fatal
+  // flaws: it's a read-modify-write race under concurrent edits, and it
+  // never self-corrects when a work item is re-parented to a different
+  // epic in Azure DevOps (the hours stay stuck on the old epic forever).
+  // A full recompute has neither problem — it always writes an absolute,
+  // freshly-derived total, and any subsequent touch anywhere in the
+  // hierarchy re-derives it from scratch. Best-effort throughout: a
+  // failed field write never blocks the entry save/edit/delete itself.
+
+  var SETTINGS_KEY = "timetracker_settings";
+  // Guaranteed recompute coverage, regardless of the knownMonthKeys registry
+  // below — keeps a fresh install correct without needing a backfill first.
+  var TOTAL_HOURS_LOOKBACK_MONTHS = 60;
+
+  // DevOps Server hands back arrays nested inside a stored object as
+  // array-like objects ({"0": ..., "length": n}); turn them back into arrays.
+  function asArray(v) {
+    if (Array.isArray(v)) return v;
+    return v && typeof v.length === "number" ? Array.prototype.slice.call(v) : [];
+  }
+
+  function getSettings(dataService) {
+    return dataService.getValue(SETTINGS_KEY, { scopeType: "Default" }).then(function (cfg) {
+      return cfg || {};
+    }, function () {
+      return {};
+    });
+  }
+
+  // settings.blockEpicLogging: new time can't be logged directly on an
+  // Epic. Existing entries on an Epic stay listed and editable — only
+  // creating one (or moving one onto an Epic) is refused.
+  var EPIC_BLOCKED_MSG = "Time can't be logged directly on an Epic — log it on a Feature, User Story or Task under it.";
+
+  function isLoggingBlocked(settings, workItemType) {
+    return !!settings.blockEpicLogging && workItemType === "Epic";
+  }
+
+  // Resolves to EPIC_BLOCKED_MSG when new time may not be logged on the
+  // work item, else null. Pass `workItemType` when already known to skip
+  // the lookup. Shared by the work item form and the Log Time dialog.
+  function loggingBlockReason(dataService, witClient, workItemId, workItemType) {
+    return getSettings(dataService).then(function (settings) {
+      if (!settings.blockEpicLogging) return null;
+      var typeP = workItemType ? Promise.resolve(workItemType) :
+        witClient.getWorkItem(workItemId, ["System.WorkItemType"]).then(function (wi) {
+          return wi.fields["System.WorkItemType"];
+        });
+      return typeP.then(function (type) {
+        return isLoggingBlocked(settings, type) ? EPIC_BLOCKED_MSG : null;
+      });
+    });
+  }
+
+  // settings.editWindowDays: when set, entries dated more than that many
+  // days ago can't be added, edited or deleted. Empty = no limit.
+  // Returns the earliest editable "YYYY-MM-DD", or null when unlimited.
+  function editWindowCutoff(settings) {
+    var days = parseInt(settings.editWindowDays, 10);
+    if (isNaN(days) || days < 0) return null;
+    var d = new Date();
+    d.setDate(d.getDate() - days);
+    return localISODate(d);
+  }
+
+  // Last cutoff read from settings, so list renders can hide edit/delete
+  // buttons synchronously. Pages call refreshEditCutoff while loading.
+  var cachedEditCutoff = null;
+
+  function refreshEditCutoff(dataService) {
+    return getSettings(dataService).then(function (settings) {
+      cachedEditCutoff = editWindowCutoff(settings);
+      return cachedEditCutoff;
+    });
+  }
+
+  function isEntryLocked(date) {
+    return !!(cachedEditCutoff && date && date < cachedEditCutoff);
+  }
+
+  // Rejects when any of `dates` (entry dates, "YYYY-MM-DD") falls before
+  // the edit window. Every add/edit/delete goes through this.
+  function checkEditWindow(dataService, dates) {
+    return getSettings(dataService).then(function (settings) {
+      var cutoff = editWindowCutoff(settings);
+      cachedEditCutoff = cutoff;
+      if (!cutoff) return;
+      (dates || []).forEach(function (date) {
+        if (date && date < cutoff) {
+          throw new Error("Entries before " + cutoff + " are locked — time can only be added, changed or deleted up to " +
+            settings.editWindowDays + " days back.");
+        }
+      });
+    });
+  }
+
+  // WIQL clause that keeps Epics out of "pick something to log on" lists.
+  function epicExclusionWiql(settings) {
+    return settings.blockEpicLogging ? " AND [System.WorkItemType] <> 'Epic'" : "";
+  }
+
+  // The work item itself plus every ancestor recorded on the entry
+  // (nearest first, epic last if one was found).
+  function chainIdsFor(entry) {
+    var ids = [entry.workItemId];
+    asArray(entry.ancestorIds).forEach(function (id) {
+      if (ids.indexOf(id) === -1) ids.push(id);
+    });
+    return ids;
+  }
+
+  // Re-resolves a work item's CURRENT ancestor chain (live from Azure
+  // DevOps) and folds it onto a copy of the entry. Called on every edit
+  // so a re-parented Feature/Epic self-heals the next time any of its
+  // entries are touched, instead of staying stuck on stale data forever.
+  // Falls back to the entry's existing chain if the work item can't be read.
+  function refreshEntryAncestry(witClient, entry) {
+    return witClient.getWorkItem(entry.workItemId, null, null, 4).then(function (workItem) {
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        return Object.assign({}, entry, {
+          parentId: anc.parentId,
+          parentTitle: anc.parentTitle,
+          parentType: anc.parentType,
+          epicId: anc.epicId,
+          epicTitle: anc.epicTitle,
+          ancestorIds: anc.ancestors.map(function (a) { return a.id; })
+        });
+      });
+    }).catch(function () { return entry; });
+  }
+
+  // touchedEntries: entry snapshots (old and/or new state; nulls allowed)
+  // whose ancestor chains define which work items need recomputing.
+  // onStart: optional, called once it's clear there is work to do (a field
+  // is configured and there are work items to update). Resolves to
+  // { id, message } for each work item whose field write failed, or
+  // undefined when there was nothing to do.
+  function recalcTotalHours(dataService, witClient, touchedEntries, onStart) {
+    if (!witClient) return Promise.resolve();
+    return getSettings(dataService).then(function (settings) {
+      var fieldRef = settings.totalHoursField;
+      if (!fieldRef) return;
+
+      var idSet = {};
+      var known = asArray(settings.knownMonthKeys).slice();
+      var knownSet = {};
+      known.forEach(function (k) { knownSet[k] = true; });
+      var registryChanged = false;
+
+      (touchedEntries || []).filter(Boolean).forEach(function (e) {
+        chainIdsFor(e).forEach(function (id) { idSet[id] = true; });
+        if (e.date) {
+          var mk = getStorageKeyForDate(e.date);
+          if (!knownSet[mk]) { knownSet[mk] = true; known.push(mk); registryChanged = true; }
+        }
+      });
+
+      var ids = Object.keys(idSet);
+      if (!ids.length) return;
+      if (onStart) onStart(ids);
+
+      var registerPromise = registryChanged
+        ? dataService.setValue(SETTINGS_KEY, Object.assign({}, settings, { knownMonthKeys: known }), { scopeType: "Default" })
+        : Promise.resolve();
+
+      return registerPromise.then(function () {
+        var fixedKeys = monthKeysBetween(
+          new Date(new Date().getFullYear(), new Date().getMonth() - TOTAL_HOURS_LOOKBACK_MONTHS, 1),
+          new Date()
+        );
+        var keySet = {};
+        fixedKeys.forEach(function (k) { keySet[k] = true; });
+        known.forEach(function (k) { keySet[k] = true; });
+        return loadEntriesForKeys(dataService, Object.keys(keySet));
+      }).then(function (allEntries) {
+        return Promise.all(ids.map(function (idStr) {
+          var id = parseInt(idStr, 10);
+          var total = 0;
+          allEntries.forEach(function (e) {
+            if (chainIdsFor(e).indexOf(id) !== -1) total += (e.hours || 0);
+          });
+          return witClient.updateWorkItem([{ op: "add", path: "/fields/" + fieldRef, value: total }], id)
+            .then(function () { return null; }, function (err) {
+              console.warn("[TimeCore] Could not update total-hours field on #" + id, err);
+              return { id: id, message: (err && err.message) || String(err) };
+            });
+        })).then(function (results) {
+          return results.filter(function (r) { return r !== null; }); // failed field writes
+        });
+      });
+    });
+  }
+
+  // Add/edit/delete don't wait for the recompute: it reads every month
+  // document and writes work items, which can take long enough on DevOps
+  // Server that the Log Time dialog looked stuck after a successful save.
+  // While it runs a status bar at the bottom of the page says so; a
+  // failure or a recompute that never finishes stays there, so users
+  // notice and report it. Nothing shows when no field is configured.
+  var RECALC_TIMEOUT_MS = 30 * 1000;
+  var recalcsRunning = 0;
+  var recalcDoneTimer = null;
+
+  function recalcInBackground(dataService, witClient, touchedEntries) {
+    var started = false, timer = null;
+    Promise.resolve().then(function () {
+      return recalcTotalHours(dataService, witClient, touchedEntries, function () {
+        started = true;
+        recalcsRunning++;
+        showRecalcStatus("working", "Updating total hours…");
+        timer = setTimeout(function () {
+          showRecalcProblem("The total-hours update has not finished after 30 seconds.");
+        }, RECALC_TIMEOUT_MS);
+      });
+    }).then(function (failures) {
+      if (!started) return;
+      finish();
+      if (failures && failures.length) {
+        showRecalcProblem("The total-hours field could not be updated on " +
+          failures.map(function (f) { return "#" + f.id + " (" + f.message + ")"; }).join(", ") + ".");
+      } else if (!recalcsRunning && !document.querySelector(".tc-recalc-status.error")) {
+        showRecalcStatus("done", "Total hours updated.");
+        recalcDoneTimer = setTimeout(hideRecalcStatus, 3000);
+      }
+    }, function (err) {
+      if (started) finish();
+      console.warn("[TimeCore] Total-hours recompute failed", err);
+      showRecalcProblem("The total-hours update failed: " + (err && err.message ? err.message : err));
+    });
+
+    function finish() {
+      clearTimeout(timer);
+      recalcsRunning--;
+    }
+  }
+
+  function showRecalcProblem(text) {
+    showRecalcStatus("error", "Your time entry was saved. " + text + " Please let your Time Tracker admin know.");
+  }
+
+  // state: "working" | "done" | "error"
+  function showRecalcStatus(state, text) {
+    clearTimeout(recalcDoneTimer);
+    var bar = document.getElementById("tcRecalcStatus");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "tcRecalcStatus";
+      bar.innerHTML = '<span class="tc-recalc-text"></span>' +
+        '<button class="tc-modal-close" title="Dismiss">&#x2715;</button>';
+      bar.querySelector("button").addEventListener("click", hideRecalcStatus);
+      document.body.appendChild(bar);
+    }
+    bar.className = "tc-recalc-status " + state;
+    bar.querySelector(".tc-recalc-text").textContent = text;
+  }
+
+  function hideRecalcStatus() {
+    var bar = document.getElementById("tcRecalcStatus");
+    if (bar) bar.remove();
+  }
+
+  var EDIT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+  var DELETE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+  function escapeHtml(text) {
+    if (text == null) return "";
+    var div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // Re-resolves ancestry before applying `updates`, but only when the
+  // total-hours field is actually configured (otherwise this would cost
+  // an extra Azure DevOps round trip on every plain hours/date edit for
+  // installs that don't use the feature at all).
+  function maybeRefreshAncestry(dataService, witClient, entry) {
+    if (!witClient || !entry) return Promise.resolve(entry);
+    return getSettings(dataService).then(function (settings) {
+      return settings.totalHoursField ? refreshEntryAncestry(witClient, entry) : entry;
+    });
+  }
+
+  function updateEntry(dataService, entryId, originalDate, updates, witClient) {
+    return checkEditWindow(dataService, [originalDate, updates.date]).then(function () {
+      return applyEntryUpdate(dataService, entryId, originalDate, updates, witClient);
+    });
+  }
+
+  function applyEntryUpdate(dataService, entryId, originalDate, updates, witClient) {
+    var originalKey = getStorageKeyForDate(originalDate);
+    var newKey = getStorageKeyForDate(updates.date);
+    if (originalKey === newKey) {
+      return dataService.getValue(originalKey, { scopeType: "Default" }).then(function(data) {
+        var oldEntry = (data || []).find(function(e) { return e.id === entryId; });
+        if (!oldEntry) throw new Error("Entry not found");
+        return maybeRefreshAncestry(dataService, witClient, oldEntry).then(function (refreshed) {
+          var newEntry = Object.assign({}, refreshed, updates);
+          var updated = data.map(function(e) {
+            return e.id === entryId ? newEntry : e;
+          });
+          return dataService.setValue(originalKey, updated, { scopeType: "Default" }).then(function (result) {
+            recalcInBackground(dataService, witClient, [oldEntry, newEntry]);
+            return result;
+          });
+        });
+      });
+    }
+    return Promise.all([
+      dataService.getValue(originalKey, { scopeType: "Default" }),
+      dataService.getValue(newKey, { scopeType: "Default" })
+    ]).then(function(results) {
+      var oldEntries = results[0] || [];
+      var newEntries = results[1] || [];
+      var entryToMove = oldEntries.find(function(e) { return e.id === entryId; });
+      if (!entryToMove) throw new Error("Entry not found in original month");
+      return maybeRefreshAncestry(dataService, witClient, entryToMove).then(function (refreshed) {
+        var updatedEntry = Object.assign({}, refreshed, updates);
+        return dataService.setValue(newKey, newEntries.concat([updatedEntry]), { scopeType: "Default" }).then(function() {
+          return dataService.setValue(originalKey, oldEntries.filter(function(e) { return e.id !== entryId; }), { scopeType: "Default" }).then(function (result) {
+            recalcInBackground(dataService, witClient, [entryToMove, updatedEntry]);
+            return result;
+          });
+        });
+      });
+    });
+  }
+
+  // ---- Ancestry resolution (parent + epic, arbitrary depth) --------
+  // Climbs System.Parent links until it finds a work item of type
+  // "Epic" (or runs out of ancestors / hits the depth guard). Used by
+  // both new-entry creation and the report's "Re-sync" action so the
+  // two stay consistent.
+  //
+  // Returns { parentId, parentTitle, parentType, epicId, epicTitle, ancestors }
+  // `ancestors` is the climbed chain (nearest first, epic last if found)
+  // so callers can inherit tags/project/client from every level, however
+  // deep, instead of stopping after the parent and grandparent.
+  var MAX_ANCESTOR_DEPTH = 25;
+
+  function resolveAncestry(witClient, workItem) {
+    var isEpic = workItem.fields["System.WorkItemType"] === "Epic";
+    var immediateParentId = workItem.fields["System.Parent"] || null;
+    var result = {
+      parentId: immediateParentId,
+      parentTitle: null,
+      parentType: null,
+      // An epic is its own epic — this is what lets entries logged
+      // directly on an epic still show up under the Epic filter/grouping.
+      epicId: isEpic ? workItem.id : null,
+      epicTitle: isEpic ? workItem.fields["System.Title"] : null,
+      ancestors: []
+    };
+
+    if (!immediateParentId) return Promise.resolve(result);
+
+    var visited = {};
+    visited[workItem.id] = true;
+
+    return witClient.getWorkItem(immediateParentId, null, null, 4).then(function (parentItem) {
+      result.parentTitle = parentItem.fields["System.Title"];
+      result.parentType = parentItem.fields["System.WorkItemType"];
+      result.ancestors.push(parentItem);
+      visited[parentItem.id] = true;
+
+      // We already know our own epic-ness; no need to hunt further up.
+      if (isEpic) return result;
+
+      if (parentItem.fields["System.WorkItemType"] === "Epic") {
+        result.epicId = parentItem.id;
+        result.epicTitle = parentItem.fields["System.Title"];
+        return result;
+      }
+
+      function climb(id, depth) {
+        if (!id || visited[id] || depth > MAX_ANCESTOR_DEPTH) return Promise.resolve();
+        visited[id] = true;
+        return witClient.getWorkItem(id, null, null, 4).then(function (ancestor) {
+          result.ancestors.push(ancestor);
+          if (ancestor.fields["System.WorkItemType"] === "Epic") {
+            result.epicId = ancestor.id;
+            result.epicTitle = ancestor.fields["System.Title"];
+            return;
+          }
+          return climb(ancestor.fields["System.Parent"], depth + 1);
+        });
+      }
+
+      return climb(parentItem.fields["System.Parent"], 1).then(function () { return result; });
     });
   }
 
   // ---- Entry construction with parent/epic inheritance -------------
-  // Mirrors processWorkItem() in time-entry.html. Resolves with the
-  // built entry; the caller is responsible for persisting it.
+  // Resolves with the built entry; the caller is responsible for
+  // persisting it.
 
-  function buildEntryForWorkItem(witClient, workItemId, currentUser, vals) {
+  function buildEntryForWorkItem(dataService, witClient, workItemId, currentUser, vals) {
     // expand: 0=None 1=Relations 2=Fields 3=Links 4=All
-    return witClient.getWorkItem(workItemId, null, null, 4).then(function (workItem) {
+    return Promise.all([
+      witClient.getWorkItem(workItemId, null, null, 4),
+      getSettings(dataService)
+    ]).then(function (results) {
+      var workItem = results[0];
+      if (isLoggingBlocked(results[1], workItem.fields["System.WorkItemType"])) {
+        throw new Error(EPIC_BLOCKED_MSG);
+      }
+      var refs = fieldRefsFromSettings(results[1]);
       var entry = {
         id: Date.now().toString(),
         workItemId: workItemId,
         workItemTitle: workItem.fields["System.Title"],
+        teamProject: workItem.fields["System.TeamProject"] || "",
         parentId: workItem.fields["System.Parent"] || null,
         tags: workItem.fields["System.Tags"] || "",
-        project: getFieldValue(workItem.fields, PROJECT_FIELD_REFS, "(No Project)"),
-        client: getFieldValue(workItem.fields, CLIENT_FIELD_REFS, "(No Client)"),
         hours: vals.hours,
         date: vals.date,
         description: vals.description || "",
@@ -175,79 +711,331 @@
         createdAt: new Date().toISOString()
       };
 
-      var parentPromise = entry.parentId
-        ? witClient.getWorkItem(entry.parentId, null, null, 4)
-        : Promise.resolve(null);
+      return resolveAncestry(witClient, workItem).then(function (anc) {
+        entry.parentTitle = anc.parentTitle;
+        entry.parentType = anc.parentType;
+        entry.epicId = anc.epicId;
+        entry.epicTitle = anc.epicTitle;
+        entry.ancestorIds = anc.ancestors.map(function (item) { return item.id; });
 
-      return parentPromise.then(function (parentItem) {
-        if (parentItem) {
-          entry.parentTitle = parentItem.fields["System.Title"];
-          entry.parentType = parentItem.fields["System.WorkItemType"];
+        anc.ancestors.forEach(function (item) {
+          if (item.fields["System.Tags"]) {
+            entry.tags = mergeTags(entry.tags, item.fields["System.Tags"]);
+          }
+        });
 
-          if (!entry.tags && parentItem.fields["System.Tags"]) {
-            entry.tags = parentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "parent";
-          }
-
-          var parentProject = getFieldValue(parentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && parentProject) {
-            entry.project = parentProject;
-            entry.projectInheritedFrom = "parent";
-          }
-
-          var parentClient = getFieldValue(parentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && parentClient) {
-            entry.client = parentClient;
-            entry.clientInheritedFrom = "parent";
-          }
-
-          if (parentItem.fields["System.WorkItemType"] === "Epic") {
-            entry.epicId = entry.parentId;
-            entry.epicTitle = entry.parentTitle;
-            if (entry.project === "(No Project)" && parentProject) {
-              entry.project = parentProject;
-              entry.projectInheritedFrom = "epic";
-            }
-            if (entry.client === "(No Client)" && parentClient) {
-              entry.client = parentClient;
-              entry.clientInheritedFrom = "epic";
-            }
-            return { parentItem: parentItem, grandparentItem: null };
-          }
-
-          if (parentItem.fields["System.Parent"]) {
-            return witClient.getWorkItem(parentItem.fields["System.Parent"], null, null, 4)
-              .then(function (grandparentItem) {
-                return { parentItem: parentItem, grandparentItem: grandparentItem };
-              });
-          }
-        }
-        return { parentItem: parentItem, grandparentItem: null };
-      }).then(function (result) {
-        var grandparentItem = result ? result.grandparentItem : null;
-
-        if (grandparentItem && grandparentItem.fields["System.WorkItemType"] === "Epic") {
-          entry.epicId = grandparentItem.id;
-          entry.epicTitle = grandparentItem.fields["System.Title"];
-
-          if (!entry.tags && grandparentItem.fields["System.Tags"]) {
-            entry.tags = grandparentItem.fields["System.Tags"];
-            entry.tagsInheritedFrom = "epic";
-          }
-          var gpProject = getFieldValue(grandparentItem.fields, PROJECT_FIELD_REFS, null);
-          if (entry.project === "(No Project)" && gpProject) {
-            entry.project = gpProject;
-            entry.projectInheritedFrom = "epic";
-          }
-          var gpClient = getFieldValue(grandparentItem.fields, CLIENT_FIELD_REFS, null);
-          if (entry.client === "(No Client)" && gpClient) {
-            entry.client = gpClient;
-            entry.clientInheritedFrom = "epic";
-          }
-        }
-        return entry;
+        return Object.assign(entry, resolveProjectClient(workItem, anc, refs));
       });
     });
+  }
+
+  // ---- Add / Edit entry modal (work item picker + time entry form) ---
+  // Single-screen design: the work item chip and the form fields are
+  // always visible together. Clicking the chip (or the search area)
+  // toggles the picker list open/closed.
+  //
+  // config: {
+  //   dataService     — ExtensionData service
+  //   witClientGetter — () => Promise<witClient>
+  //   currentUser     — { id, name, email }
+  //   projectName     — scopes the WIQL title search
+  //   recentItems     — [{ id, title, type }] shown before the user types
+  //   onSaved         — () called after a successful save
+  //   title           — modal heading (default "Log Time")
+  //   saveLabel       — save button label (default "Log Time")
+  //   initialItem     — { id, title, type } pre-selected work item
+  //   lockItem        — true: initialItem can't be changed (work item page)
+  //   initialHours    — number
+  //   initialDate     — "YYYY-MM-DD"
+  //   initialDesc     — string
+  //   // Edit mode (update existing entry):
+  //   entryId         — id of the entry being edited
+  //   originalDate    — entry.date at load time (for storage key lookup)
+  // }
+  function openAddEntryModal(config) {
+    var old = document.getElementById('tcAddModal');
+    if (old) old.remove();
+
+    var today = localISODate(new Date());
+    var backdrop = document.createElement('div');
+    backdrop.id = 'tcAddModal';
+    backdrop.className = 'edit-modal-backdrop';
+    backdrop.style.display = 'flex';
+
+    var PENCIL_ICON =
+      '<svg class="tc-chip-pencil" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
+        ' stroke="currentColor" stroke-width="2.5">' +
+        '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>' +
+        '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>' +
+      '</svg>';
+
+    backdrop.innerHTML =
+      '<div class="edit-modal-content tc-add-modal">' +
+        '<div class="tc-add-header"><h3>' + escapeHtml(config.title || 'Log Time') + '</h3>' +
+          '<button class="tc-modal-close" id="tcAddClose" title="Close">&#x2715;</button></div>' +
+        // Work item area: chip (selected) XOR search (unselected)
+        '<button class="tc-selected-chip" id="tcSelectedChip" style="display:none"' +
+          ' title="Click to change work item">' +
+          '<span id="tcChipContent"></span>' +
+          PENCIL_ICON +
+        '</button>' +
+        '<div id="tcSearchWrap">' +
+          '<input type="text" id="tcSearchInput" class="tc-search-input"' +
+            ' placeholder="Search by title or work item #ID…" autocomplete="off">' +
+          '<div id="tcSearchStatus" class="tc-search-status"></div>' +
+          '<div id="tcItemList" class="tc-item-list"></div>' +
+        '</div>' +
+        // Form fields — always visible
+        '<div class="filter-group" style="margin-top:8px">' +
+          '<label for="tcHours">Hours Spent</label>' +
+          '<input type="number" id="tcHours" min="0.25" max="24" step="0.25" placeholder="e.g. 2.5"' +
+            ' onkeydown="return event.key!==\'e\'&&event.key!==\'E\'&&event.key!==\'+\'&&event.key!==\'-\'">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDate">Date</label>' +
+          '<input type="date" id="tcDate" value="' + today + '">' +
+        '</div>' +
+        '<div class="filter-group">' +
+          '<label for="tcDesc">Description' +
+            ' <span style="font-weight:400;color:var(--text-secondary)">(required, max 100 chars)</span></label>' +
+          '<textarea id="tcDesc" rows="2" maxlength="100"' +
+            ' style="resize:vertical;width:100%;box-sizing:border-box;"></textarea>' +
+        '</div>' +
+        '<div id="tcFormMsg" class="message" style="display:none;margin:0;padding:6px 10px;font-size:13px;"></div>' +
+        '<div class="edit-modal-actions">' +
+          '<button id="tcSaveBtn">' + escapeHtml(config.saveLabel || 'Log Time') + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(backdrop);
+
+    var selectedItem = null;
+    var searchTimer  = null;
+    var settingsP    = getSettings(config.dataService);
+    var settings     = {};
+    settingsP.then(function(s) {
+      settings = s;
+      var cutoff = editWindowCutoff(s);
+      if (cutoff) document.getElementById('tcDate').min = cutoff;
+    });
+
+    function close() { backdrop.remove(); document.removeEventListener('keydown', onEsc); }
+
+    // Show the search input + list, hide the chip
+    function openSearch() {
+      selectedItem = null;
+      document.getElementById('tcSelectedChip').style.display = 'none';
+      document.getElementById('tcSearchWrap').style.display = '';
+      document.getElementById('tcSearchInput').value = '';
+      document.getElementById('tcSearchStatus').textContent = '';
+      renderList(config.recentItems || [], 'Recently used');
+      setTimeout(function() { document.getElementById('tcSearchInput').focus(); }, 0);
+    }
+
+    // Hide search, show the selected-item chip
+    function selectItem(item) {
+      selectedItem = item;
+      document.getElementById('tcSearchWrap').style.display = 'none';
+      var chip = document.getElementById('tcSelectedChip');
+      chip.style.display = '';
+      document.getElementById('tcChipContent').innerHTML =
+        (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+        '<span class="wi-id">#' + item.id + '</span> ' +
+        '<span class="wi-title">' + escapeHtml(item.title) + '</span>';
+      document.getElementById('tcFormMsg').style.display = 'none';
+      setTimeout(function() { document.getElementById('tcHours').focus(); }, 0);
+    }
+
+    // A list click only selects the item when new time may be logged on
+    // it. (initialItem bypasses this, so an existing entry on a now-blocked
+    // Epic stays editable.)
+    function pickItem(item) {
+      var statusEl = document.getElementById('tcSearchStatus');
+      statusEl.textContent = '';
+      config.witClientGetter().then(function(c) {
+        return loggingBlockReason(config.dataService, c, item.id, item.type);
+      }).then(function(reason) {
+        if (reason) statusEl.textContent = reason;
+        else selectItem(item);
+      }, function() {
+        statusEl.textContent = 'Could not check work item #' + item.id + ' — try again.';
+      });
+    }
+
+    function renderList(items, groupLabel) {
+      var list = document.getElementById('tcItemList');
+      if (!items || !items.length) {
+        list.innerHTML = '<div class="tc-item-empty">' +
+          escapeHtml(groupLabel || 'No items found') + '</div>';
+        return;
+      }
+      list.innerHTML =
+        (groupLabel ? '<div class="tc-item-group">' + escapeHtml(groupLabel) + '</div>' : '') +
+        items.map(function(item) {
+          var blocked = isLoggingBlocked(settings, item.type);
+          return '<button class="tc-item-row"' +
+            (blocked ? ' disabled title="' + escapeHtml(EPIC_BLOCKED_MSG) + '"' : '') + '>' +
+            (item.type ? '<span class="tc-item-type">' + escapeHtml(item.type) + '</span> ' : '') +
+            '<span class="wi-id">#' + item.id + '</span> ' +
+            '<span class="wi-title tc-item-title">' + escapeHtml(item.title || '(untitled)') + '</span>' +
+          '</button>';
+        }).join('');
+      var cached = items;
+      Array.prototype.forEach.call(list.querySelectorAll('.tc-item-row'), function(btn, i) {
+        btn.addEventListener('click', function() { pickItem(cached[i]); });
+      });
+    }
+
+    function doSearch(raw) {
+      var q = (raw || '').trim();
+      var statusEl = document.getElementById('tcSearchStatus');
+      if (!q) {
+        statusEl.textContent = '';
+        renderList(config.recentItems || [], 'Recently used');
+        return;
+      }
+      // Pure number → direct work item ID lookup
+      if (/^\d+$/.test(q)) {
+        statusEl.textContent = 'Looking up #' + q + '…';
+        config.witClientGetter().then(function(c) {
+          return c.getWorkItem(parseInt(q, 10), null, null, 0);
+        }).then(function(wi) {
+          statusEl.textContent = '';
+          renderList([{
+            id: wi.id,
+            title: wi.fields['System.Title'],
+            type: wi.fields['System.WorkItemType']
+          }], null);
+        }).catch(function() {
+          statusEl.textContent = '';
+          renderList([], 'No work item found for #' + q);
+        });
+        return;
+      }
+      if (q.length < 2) {
+        statusEl.textContent = 'Type at least 2 characters…';
+        renderList([], '');
+        return;
+      }
+      statusEl.textContent = 'Searching…';
+      Promise.all([config.witClientGetter(), settingsP]).then(function(results) {
+        var c = results[0];
+        var safe = q.replace(/'/g, "''");
+        var proj = config.projectName || '';
+        var wiql = { query:
+          'SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS \'' + safe + '\'' +
+          (proj ? ' AND [System.TeamProject] = \'' + proj.replace(/'/g, "''") + '\'' : '') +
+          ' AND [System.State] NOT IN (\'Closed\',\'Done\',\'Removed\',\'Resolved\',\'Completed\')' +
+          epicExclusionWiql(results[1]) +
+          ' ORDER BY [System.ChangedDate] DESC'
+        };
+        return c.queryByWiql(wiql, proj ? { project: proj } : null, false, 20)
+          .then(function(res) {
+            var ids = (res.workItems || []).map(function(w) { return w.id; }).slice(0, 20);
+            if (!ids.length) return [];
+            return c.getWorkItems(ids, proj || null,
+              ['System.Id', 'System.Title', 'System.WorkItemType'], null, null, 2)
+              .then(function(rows) {
+                return (rows || []).map(function(wi) {
+                  return { id: wi.id, title: wi.fields['System.Title'], type: wi.fields['System.WorkItemType'] };
+                });
+              });
+          });
+      }).then(function(results) {
+        statusEl.textContent = '';
+        if (!results.length) {
+          document.getElementById('tcItemList').innerHTML =
+            '<div class="tc-item-empty">No results for &ldquo;' + escapeHtml(q) + '&rdquo;</div>';
+        } else {
+          renderList(results, null);
+        }
+      }).catch(function() {
+        statusEl.textContent = '';
+        renderList([], 'Search failed — check your connection');
+      });
+    }
+
+    function doSave() {
+      var hours = parseFloat(document.getElementById('tcHours').value);
+      var date  = document.getElementById('tcDate').value;
+      var desc  = document.getElementById('tcDesc').value.trim();
+      var msgEl = document.getElementById('tcFormMsg');
+      function showErr(msg) {
+        msgEl.textContent = msg;
+        msgEl.className = 'message error';
+        msgEl.style.display = '';
+      }
+      if (!selectedItem)                      { showErr('Select a work item first'); return; }
+      if (!hours || hours <= 0 || hours > 24) { showErr('Enter valid hours (0.25–24)'); return; }
+      if (!date)                              { showErr('Pick a date'); return; }
+      if (!desc)                              { showErr('Enter a description'); return; }
+
+      var saveBtn = document.getElementById('tcSaveBtn');
+      saveBtn.disabled = true;
+      msgEl.style.display = 'none';
+
+      var sameItem = config.entryId && config.initialItem && selectedItem.id === config.initialItem.id;
+      // Checked up front: moving an entry to another work item deletes
+      // before it saves, so a late rejection would lose the entry.
+      var getClient = function() {
+        return checkEditWindow(config.dataService, [date, config.originalDate]).then(config.witClientGetter);
+      };
+      var p;
+      if (config.entryId && sameItem) {
+        p = getClient().then(function(c) {
+          return updateEntry(config.dataService, config.entryId, config.originalDate,
+            { hours: hours, date: date, description: desc }, c);
+        });
+      } else if (config.entryId) {
+        p = getClient().then(function(c) {
+          return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc }).then(function(newEntry) {
+            return deleteEntryById(config.dataService, config.entryId, config.originalDate, c)
+              .then(function() { return saveEntry(config.dataService, newEntry, c); });
+          });
+        });
+      } else {
+        p = getClient().then(function(c) {
+          return buildEntryForWorkItem(config.dataService, c, selectedItem.id, config.currentUser,
+            { hours: hours, date: date, description: desc }).then(function(entry) {
+            return saveEntry(config.dataService, entry, c);
+          });
+        });
+      }
+      p.then(function() {
+        close();
+        if (config.onSaved) config.onSaved();
+      }).catch(function(e) {
+        showErr('Error: ' + (e && e.message ? e.message : 'could not save'));
+        saveBtn.disabled = false;
+      });
+    }
+
+    document.getElementById('tcSearchInput').addEventListener('input', function(ev) {
+      clearTimeout(searchTimer);
+      var q = ev.target.value;
+      searchTimer = setTimeout(function() { doSearch(q); }, 300);
+    });
+    if (config.lockItem) {
+      document.getElementById('tcSelectedChip').classList.add('locked');
+    } else {
+      document.getElementById('tcSelectedChip').addEventListener('click', openSearch);
+    }
+    document.getElementById('tcSaveBtn').addEventListener('click', doSave);
+    document.getElementById('tcAddClose').addEventListener('click', close);
+    backdrop.addEventListener('click', function(ev) { if (ev.target === backdrop) close(); });
+    function onEsc(ev) { if (ev.key === 'Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+
+    // Pre-fill for edit mode, otherwise start with the search open
+    if (config.initialItem) {
+      selectItem(config.initialItem);
+      if (config.initialHours !== undefined) document.getElementById('tcHours').value = config.initialHours;
+      if (config.initialDate)               document.getElementById('tcDate').value  = config.initialDate;
+      if (config.initialDesc)               document.getElementById('tcDesc').value  = config.initialDesc;
+    } else {
+      openSearch();
+    }
   }
 
   global.TimeCore = {
@@ -255,6 +1043,8 @@
     CLIENT_FIELD_REFS: CLIENT_FIELD_REFS,
     PROJECT_FIELD_REFS: PROJECT_FIELD_REFS,
     getFieldValue: getFieldValue,
+    fieldRefsFromSettings: fieldRefsFromSettings,
+    resolveProjectClient: resolveProjectClient,
     localISODate: localISODate,
     todayISO: todayISO,
     startOfWeek: startOfWeek,
@@ -265,8 +1055,28 @@
     getEntriesForMonth: getEntriesForMonth,
     loadEntriesForMonths: loadEntriesForMonths,
     loadEntriesForKeys: loadEntriesForKeys,
+    checkIsAdmin: checkIsAdmin,
     saveEntry: saveEntry,
     deleteEntryById: deleteEntryById,
-    buildEntryForWorkItem: buildEntryForWorkItem
+    SETTINGS_KEY: SETTINGS_KEY,
+    getSettings: getSettings,
+    asArray: asArray,
+    EPIC_BLOCKED_MSG: EPIC_BLOCKED_MSG,
+    isLoggingBlocked: isLoggingBlocked,
+    loggingBlockReason: loggingBlockReason,
+    epicExclusionWiql: epicExclusionWiql,
+    editWindowCutoff: editWindowCutoff,
+    checkEditWindow: checkEditWindow,
+    refreshEditCutoff: refreshEditCutoff,
+    isEntryLocked: isEntryLocked,
+    recalcTotalHours: recalcTotalHours,
+    mergeTags: mergeTags,
+    EDIT_ICON: EDIT_ICON,
+    DELETE_ICON: DELETE_ICON,
+    escapeHtml: escapeHtml,
+    updateEntry: updateEntry,
+    resolveAncestry: resolveAncestry,
+    buildEntryForWorkItem: buildEntryForWorkItem,
+    openAddEntryModal: openAddEntryModal
   };
 })(window);

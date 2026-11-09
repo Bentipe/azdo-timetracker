@@ -37,10 +37,12 @@ This means you only need to set Tags, Project, and Client on your User Stories o
 
 ### My Time (Hub + Dashboard Widget)
 
+Everything lives under one Boards hub, **Time Tracker**, with tabs for My Time, Time Reports and Settings (Settings only for Project Administrators). Switching tabs is instant and each tab keeps its filters; the URL remembers the open tab and its filters. Use **"Make this my default tab"** (top right) to choose which tab the hub opens on.
+
 A personal landing view for each user — their own hours and active work, not the cross-user reporting in Time Reports.
 
-- **Boards > My Time** hub: hours today / this week / this month, a Mon–Sun week strip (zero-hour weekdays gently flagged), a "What you're working on" table that merges work items assigned to you with anything you've logged time to recently, plus inline **quick-log** (log hours against any of those items without opening the work item), and your 10 most recent entries with delete.
-- **My Time dashboard widget** (2×2): hours this week / today and a count of assigned work items with no time logged this week. Clicking it opens the My Time hub.
+- **Boards > Time Tracker > My Time** tab: hours today / this week / this month, a Mon–Sun week strip (zero-hour weekdays gently flagged), a "What you're working on" table that merges work items assigned to you with anything you've logged time to recently, plus inline **quick-log** (log hours against any of those items without opening the work item), and your 10 most recent entries with delete.
+- **My Time dashboard widget** (2×2): hours this week / today and a count of assigned work items with no time logged this week. Clicking it opens the Time Tracker hub on the My Time tab.
 
 > **One-time setup for the widget:** Azure DevOps does not let an extension place a widget automatically, and an extension cannot be set as a project's landing page. To surface this on project entry, a project admin adds it once: **Overview > Dashboards > Edit > Add a widget > "My Time"**. After that it shows for everyone viewing that dashboard.
 
@@ -48,10 +50,31 @@ A personal landing view for each user — their own hours and active work, not t
 
 Sends each team member a weekly email with their day-by-day hour breakdown and total. Managers can be CC'd per person.
 
-- Configured via **Boards > Notification Settings** (Project Administrators only)
+- Configured via **Boards > Time Tracker > Settings** (Project Administrators only)
 - Delivered by an Azure DevOps pipeline on a configurable schedule
 - Zero-hour days are highlighted; days with no entries show as —
 - Users who have never logged hours are not emailed
+- Sent with **high importance** when the week is below the user's target
+
+### Manager Digest
+
+One email to the managers with the whole team on a single page: last week's hours per person against their target, the weekdays they logged nothing, and a **trend** over the Daily Reminder's **Check the last (working days)** look-back, rounded up to full weeks: at least 4 and at most 8 weeks, so the table stays readable (30 working days gives 6 weeks). The follow-up always covers the full look-back, even past 8 weeks. Totals are recalculated on every send, so the trend also shows whether earlier gaps were filled in afterwards; weeks past the edit window are marked *final*.
+
+- Sent by the same pipeline as the weekly summary, on its own day and time (default **Tuesday 07:00**, one day after the personal mails, so people get a day to fix their hours first)
+- Covers everyone with **Send Email** ticked; worst first, so the people to talk to are at the top
+- Optional **firm follow-up**: in the same run, everyone below their target in any week within the Daily Reminder's **Check the last (working days)** look-back (counted back from the digest week's Friday; 30 days covers 6 weeks, the edit window doesn't matter) gets a personal high-importance mail ("you logged 19.0 of 40 hours… only excusable when sick or on holiday… please fix your hours today"), including the days with nothing logged and how many of the last 4 weeks came out short. It's always sent when a week is short (planned holidays are logged ahead). It still comes from `SMTP_FROM`, so delivery is unchanged; **Reply-To** and a **BCC** go to one configurable address, so replies reach the manager and they see who got one. The mail ends with the manager's own **Signature**, set in the same place
+
+### Daily Reminder (email)
+
+Each weekday morning, emails everyone whose previous working day came out short (Monday checks Friday): "On Tue 27 October you logged 1.0 of 8 hours".
+
+- A day is short when it has fewer hours than the user's **Hours Mon–Fri** (e.g. `8 8 4 8 8` for a 36-hour week with a short Wednesday), else their weekly target ÷ 5, else when it has no hours at all
+- **Check the last (working days)** sets how far back it looks (default 1). With e.g. 5, one mail lists every short day of the past five working days, so a missed reminder or a day still left open keeps coming back until it's filled in
+- Extra hours on another day of the same week make up for a short day: 7 + 9 hours, or 4 + 10 + 10 by Wednesday, sends no reminder, because the checked days of that week add up to what's expected
+- A day on which nobody logged anything (public holiday) is skipped
+- Days past the edit window are still listed — the user can't fix those themselves and should ask someone who can
+- Always sent with **high importance**
+- Sent by the same pipeline as the weekly summary; enable it and pick the time under **Daily Reminder** in Notification Settings
 
 ### Daily Slack Reminders
 
@@ -119,7 +142,7 @@ Sends a **private Slack DM** each weekday morning to anyone on the Notification 
 4. Click "Log Time"
 
 ### Viewing Reports
-1. Go to Boards > Time Reports
+1. Go to Boards > Time Tracker > Time Reports
 2. Set your date range and filters
 3. Switch between different views (All Entries, By User, By Epic, By Tag)
 4. Click "Export CSV" to download the data
@@ -130,11 +153,13 @@ The email feature runs as a scheduled Azure DevOps pipeline. It reads time data 
 
 ### 1. Configure recipients (Notification Settings)
 
-1. Go to **Boards > Notification Settings** (only visible to Project Administrators)
+1. Go to **Boards > Time Tracker > Settings > Email Notifications** (tab only visible to Project Administrators)
 2. For each user, toggle **Send Email** on or off
 3. Add manager email(s) in the **CC** field (comma-separated for multiple)
 4. Set the **Send on** day and **At** time (informational — see step 2 for the actual schedule)
-5. Click **Save**
+5. Optional: under **Manager Digest**, tick the checkbox, enter the recipients and pick its day and time
+6. Optional: under **Daily Reminder**, tick the checkbox and pick the time; fill in **Hours Mon–Fri** for anyone without an even week
+7. Click **Save**
 
 ### 2. Create the pipeline
 
@@ -170,6 +195,7 @@ In the pipeline **Variables** tab, add the following. Mark secrets as **Secret**
 | `SMTP_SECURE` | `false` _(optional, `true` for TLS)_ | |
 | `SMTP_USER` | _(optional, only if SMTP requires auth)_ | |
 | `SMTP_PASS` | _(optional)_ | ✓ |
+| `TIMETRACKER_URL` | _(optional — link in the daily reminder)_ | |
 
 > **Creating the PAT:**
 > 1. Go to **User settings → Personal Access Tokens → New Token**
@@ -193,12 +219,14 @@ Run the pipeline manually (**Run pipeline → Advanced**) with these parameters:
 |-----------|-------|
 | `override_week_start` | Any past Monday, e.g. `2026-05-06` |
 | `dry_run` | `true` — logs output without sending any emails |
+| `override_day` | Any past weekday, e.g. `2026-10-21` — sends the daily reminder for that day |
+| `mails` | `all` (default), `personal`, `digest` or `daily` — test only one kind of mail |
 
 ## Daily Slack Reminders — Setup
 
 Like the weekly email, this runs as a scheduled Azure DevOps pipeline that reads time data and the Notification Settings roster directly from the Extension Data service — no extra backend required. It DMs anyone with zero hours for the previous working day.
 
-> **Prerequisite:** the user must exist on the **Boards > Notification Settings** roster, and their Azure DevOps email must match their Slack account email (auto-lookup uses `users.lookupByEmail`). The "Send Email" toggle does **not** affect Slack — the daily reminder considers the whole roster (use `EXCLUDE_EMAILS` to opt someone out).
+> **Prerequisite:** the user must exist on the **Boards > Time Tracker > Settings** roster, and their Azure DevOps email must match their Slack account email (auto-lookup uses `users.lookupByEmail`). The "Send Email" toggle does **not** affect Slack — the daily reminder considers the whole roster (use `EXCLUDE_EMAILS` to opt someone out).
 
 ### 1. Create a Slack app
 
@@ -256,6 +284,14 @@ If you want project/client tracking:
 
 If these fields don't exist, the extension will still work - entries will simply show "(No Project)" and "(No Client)".
 
+### Using a Different Field
+
+If your organization already has a field for this under another name (e.g. `Customer` instead of `Client`), pick it in the extension's **Settings** page under **Project & Client Fields**. The default looks for `Custom.Project` / `Custom.Client`. After changing it, run **Re-sync** in Time Reports to update existing entries.
+
+### Locking Old Entries
+
+To stop old records from being changed, set **Edit window (days back)** on the extension's **Settings** page under **Logging Rules**. With e.g. `14`, time dated more than 14 days ago can't be added, edited or deleted by anyone. Leave it empty (the default) for no limit.
+
 ## Data Storage
 
 Time entries are stored using Azure DevOps Extension Data Service with **collection-scoped storage**. This means:
@@ -268,9 +304,8 @@ Time entries are stored using Azure DevOps Extension Data Service with **collect
 ## Limitations
 
 - Hierarchy support works for standard Azure DevOps hierarchy (Epic → Feature → User Story → Task/Bug)
-- Property inheritance only applies to new time entries (existing entries won't be retroactively updated)
+- Property inheritance only applies to new time entries; an admin can update existing entries with **Re-sync** in Time Reports
 - Users can only delete their own time entries
-- Custom.Project and Custom.Client fields must use exact reference names if you want project/client tracking
 - Maximum of 3 levels of hierarchy traversal (work item → parent → grandparent)
 
 ## Development

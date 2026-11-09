@@ -7,10 +7,9 @@
   <script src="../lib/VSS.SDK.min.js"></script>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="time-report.css">
+  <script src="time-core.js"></script>
 </head>
 <body>
-  <h1>Time Reports</h1>
-  
   <div class="filters">
     <div class="filter-group">
       <label for="dateFrom">From Date</label>
@@ -21,40 +20,45 @@
       <input type="date" id="dateTo">
     </div>
     <div class="filter-group">
-      <label for="userFilter">User</label>
-      <select id="userFilter">
-        <option value="">All Users</option>
-      </select>
+      <label>User</label>
+      <div class="ms" id="userFilter" data-all="All Users"></div>
     </div>
     <div class="filter-group">
-      <label for="epicFilter">Epic</label>
-      <select id="epicFilter">
-        <option value="">All Epics</option>
-      </select>
+      <label>Epic</label>
+      <div class="ms" id="epicFilter" data-all="All Epics"></div>
     </div>
     <div class="filter-group">
-      <label for="projectFilter">Project</label>
-      <select id="projectFilter">
-        <option value="">All Projects</option>
-      </select>
+      <label>Project</label>
+      <div class="ms" id="projectFilter" data-all="All Projects"></div>
     </div>
     <div class="filter-group">
-      <label for="clientFilter">Client</label>
-      <select id="clientFilter">
-        <option value="">All Clients</option>
-      </select>
+      <label>Client</label>
+      <div class="ms" id="clientFilter" data-all="All Clients"></div>
     </div>
     <div class="filter-group">
-      <label for="tagFilter">Tag</label>
-      <select id="tagFilter">
-        <option value="">All Tags</option>
-      </select>
+      <label>Tag</label>
+      <div class="ms" id="tagFilter" data-all="All Tags"></div>
     </div>
     <div class="btn-group">
-      <button onclick="loadAllEntries()">Apply Filters</button>
-      <button class="secondary" onclick="clearFilters()">Clear</button>
-      <button class="secondary" onclick="exportCSV()">Export CSV</button>
-      <button class="secondary" onclick="exportBackupJSON()">Backup JSON</button>
+      <button class="icon-btn toolbar-btn" onclick="clearFilters()" title="Clear filters" aria-label="Clear filters">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon><line x1="16" y1="16" x2="22" y2="22"></line><line x1="22" y1="16" x2="16" y2="22"></line></svg>
+      </button>
+      <button class="icon-btn toolbar-btn" onclick="exportCSV()" title="Export CSV" aria-label="Export CSV">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      </button>
+      <button class="icon-btn toolbar-btn" onclick="exportBackupJSON()" title="Backup JSON" aria-label="Backup JSON">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+      </button>
+      <button id="resyncBtn" class="icon-btn toolbar-btn resync-btn" onclick="resyncAll()" title="Re-sync tags, parent, epic, project and client from Azure DevOps (admin)" aria-label="Re-sync" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        <span id="resyncProgress"></span>
+      </button>
+    </div>
+    <div class="filters-add">
+      <button class="add-entry-btn" onclick="openAddEntry()" title="Add a new time entry">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add Entry
+      </button>
     </div>
   </div>
 
@@ -147,24 +151,198 @@
     let filteredEntries = [];
     let currentView = "entries";
     var pendingFilters = null;
+    let currentUser = null;
+    var collectionUri = "";
+    var currentProjectName = "";
+    var TC = window.TimeCore;
+    var EDIT_ICON = TC.EDIT_ICON;
+    var DELETE_ICON = TC.DELETE_ICON;
+    var escapeHtml = TC.escapeHtml;
+    var _witClient = null;
+
+    function getWitClient() {
+      if (_witClient) return Promise.resolve(_witClient);
+      return new Promise(function(resolve) {
+        VSS.require(['VSS/Service', 'TFS/WorkItemTracking/RestClient'], function(VSS_Service, WIT_Client) {
+          _witClient = VSS_Service.getCollectionClient(WIT_Client.WorkItemTrackingHttpClient);
+          resolve(_witClient);
+        });
+      });
+    }
+
+    var checkIsAdmin = TC.checkIsAdmin;
+
+    function fetchTagsForWorkItem(witClient, workItemId, fieldRefs) {
+      return witClient.getWorkItem(workItemId, null, null, 4).then(function(wi) {
+        var meta = {
+          workItemTitle: wi.fields['System.Title'],
+          tags: wi.fields['System.Tags'] || '',
+          parentId: wi.fields['System.Parent'] || null,
+          parentTitle: null,
+          parentType: null,
+          epicId: null,
+          epicTitle: null
+        };
+        return TC.resolveAncestry(witClient, wi).then(function(anc) {
+          meta.parentTitle = anc.parentTitle;
+          meta.parentType = anc.parentType;
+          meta.epicId = anc.epicId;
+          meta.epicTitle = anc.epicTitle;
+          meta.ancestorIds = anc.ancestors.map(function(item) { return item.id; });
+          anc.ancestors.forEach(function(item) {
+            if (item.fields['System.Tags']) {
+              meta.tags = TC.mergeTags(meta.tags, item.fields['System.Tags']);
+            }
+          });
+          return Object.assign(meta, TC.resolveProjectClient(wi, anc, fieldRefs));
+        });
+      });
+    }
+
+    function batchUpdateEntries(entryUpdates) {
+      var byKey = {};
+      entryUpdates.forEach(function(u) {
+        var key = TC.getStorageKeyForDate(u.date);
+        if (!byKey[key]) byKey[key] = [];
+        byKey[key].push(u);
+      });
+      return Promise.all(Object.keys(byKey).map(function(key) {
+        var updates = byKey[key];
+        return window.dataService.getValue(key, { scopeType: 'Default' }).then(function(data) {
+          var monthEntries = data || [];
+          var updById = {};
+          updates.forEach(function(u) { updById[u.id] = u.updates; });
+          var updated = monthEntries.map(function(e) {
+            return updById[e.id] ? Object.assign({}, e, updById[e.id]) : e;
+          });
+          return window.dataService.setValue(key, updated, { scopeType: 'Default' });
+        });
+      }));
+    }
+
+    function resyncAll() {
+      if (filteredEntries.length === 0) {
+        alert('No entries in current filter to update.');
+        return;
+      }
+      // Deduplicate by workItemId — fetch each work item once
+      var byWorkItem = {};
+      filteredEntries.forEach(function(e) {
+        if (!byWorkItem[e.workItemId]) byWorkItem[e.workItemId] = [];
+        byWorkItem[e.workItemId].push(e);
+      });
+      var workItemIds = Object.keys(byWorkItem);
+      var total = workItemIds.length;
+      var failed = [];
+
+      if (!confirm('Re-sync tags, parent, epic, project and client for ' + filteredEntries.length + ' filtered entries (' + total + ' unique work items) from Azure DevOps?')) return;
+
+      var btn = document.getElementById('resyncBtn');
+      var progress = document.getElementById('resyncProgress');
+      btn.disabled = true;
+      var done = 0;
+      var entryUpdates = [];
+      var metaByWorkItem = {};
+
+      Promise.all([getWitClient(), TC.getSettings(window.dataService)]).then(function(results) {
+        var witClient = results[0];
+        var fieldRefs = TC.fieldRefsFromSettings(results[1]);
+        function processBatch(ids) {
+          if (ids.length === 0) return Promise.resolve();
+          var batch = ids.slice(0, 5);
+          var rest = ids.slice(5);
+          return Promise.all(batch.map(function(wiId) {
+            return fetchTagsForWorkItem(witClient, wiId, fieldRefs).then(function(meta) {
+              metaByWorkItem[wiId] = meta;
+              byWorkItem[wiId].forEach(function(e) {
+                entryUpdates.push({ id: e.id, date: e.date, updates: meta });
+              });
+            }).catch(function(err) {
+              console.warn('[TimeReport] Re-sync failed for work item ' + wiId, err);
+              failed.push(wiId);
+            }).then(function() {
+              done++;
+              progress.textContent = done + '/' + total;
+            });
+          })).then(function() { return processBatch(rest); });
+        }
+
+        progress.textContent = '0/' + total;
+        return processBatch(workItemIds).then(function() {
+          return batchUpdateEntries(entryUpdates);
+        }).then(function() {
+          // Recompute total-hours (if configured) for every work item this
+          // resync touched, using the freshly-resynced ancestor chains —
+          // this is the explicit "fix everything now" path for hours stuck
+          // on a work item after it was re-parented in Azure DevOps.
+          var touchedEntries = [];
+          workItemIds.forEach(function(wiId) {
+            var meta = metaByWorkItem[wiId];
+            if (!meta) return;
+            byWorkItem[wiId].forEach(function(e) {
+              touchedEntries.push(Object.assign({}, e, meta));
+            });
+          });
+          return TC.recalcTotalHours(window.dataService, witClient, touchedEntries);
+        }).then(function(totalFailures) {
+          btn.disabled = false;
+          progress.textContent = '';
+          var msg = 'Re-synced ' + entryUpdates.length + ' of ' + filteredEntries.length + ' entries (' + (total - failed.length) + '/' + total + ' work items).';
+          if (failed.length) msg += '\n\nCould not fetch work items (deleted or no access?): ' + failed.join(', ');
+          if (totalFailures && totalFailures.length) {
+            msg += '\n\nCould not update the total-hours field on:\n' + totalFailures.map(function(f) {
+              return '#' + f.id + ': ' + f.message;
+            }).join('\n');
+          }
+          alert(msg);
+          return loadAllEntries();
+        });
+      }).catch(function(err) {
+        btn.disabled = false;
+        progress.textContent = '';
+        alert('Re-sync failed: ' + err.message);
+      });
+    }
+
+    function openAddEntry() {
+      var seen = {}, recent = [];
+      // Build recent list from current user's entries, newest first.
+      allEntries.filter(function(e) {
+        return currentUser && String(e.userId) === String(currentUser.id);
+      }).slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: currentProjectName,
+        recentItems: recent.slice(0, 20),
+        onSaved: function() { loadAllEntries(); }
+      });
+    }
 
     function parseHashString(hash) {
       if (!hash) return null;
+      // Values stay encoded here: multi-select filters are a comma-joined
+      // list of individually encoded values, so split before decoding.
       var raw = {};
       hash.split("&").forEach(function(pair) {
         var idx = pair.indexOf("=");
-        if (idx > 0) raw[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+        if (idx > 0) raw[decodeURIComponent(pair.slice(0, idx))] = pair.slice(idx + 1);
       });
       if (!Object.keys(raw).length) return null;
+      function list(v) { return v.split(",").filter(Boolean).map(decodeURIComponent); }
       // Map URL-friendly names to internal filter keys
       var params = {};
-      if (raw.startdate) params.dateFrom = raw.startdate;
-      if (raw.enddate)   params.dateTo   = raw.enddate;
-      if (raw.user)      params.user     = raw.user;
-      if (raw.epic)      params.epic     = raw.epic;
-      if (raw.project)   params.project  = raw.project;
-      if (raw.client)    params.client   = raw.client;
-      if (raw.tag)       params.tag      = raw.tag;
+      if (raw.startdate) params.dateFrom = decodeURIComponent(raw.startdate);
+      if (raw.enddate)   params.dateTo   = decodeURIComponent(raw.enddate);
+      ["user", "epic", "project", "client", "tag"].forEach(function(k) {
+        if (raw[k]) params[k] = list(raw[k]);
+      });
       return Object.keys(params).length ? params : null;
     }
 
@@ -175,21 +353,14 @@
       if (dateFrom) parts.push("startdate=" + encodeURIComponent(dateFrom));
       if (dateTo)   parts.push("enddate="   + encodeURIComponent(dateTo));
       [["userFilter","user"],["epicFilter","epic"],["projectFilter","project"],["clientFilter","client"],["tagFilter","tag"]].forEach(function(pair) {
-        var v = document.getElementById(pair[0]).value;
-        if (v) parts.push(pair[1] + "=" + encodeURIComponent(v));
+        var v = msGetValues(pair[0]);
+        if (v === null) { if (pair[1] === "user") parts.push("user=*"); }
+        else if (v.length) parts.push(pair[1] + "=" + v.map(encodeURIComponent).join(","));
       });
       var hashStr = parts.join("&");
       VSS.getService(VSS.ServiceIds.Navigation).then(function(nav) {
         nav.setHash(hashStr);
       });
-    }
-
-    // Helper function to get storage key for a given date
-    function getStorageKeyForDate(dateString) {
-      var date = new Date(dateString);
-      var year = date.getFullYear();
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      return STORAGE_KEY_PREFIX + year + "_" + month;
     }
 
     // Get all months between two dates
@@ -233,15 +404,18 @@
           VSS.getService(VSS.ServiceIds.ExtensionData).then(function(dataService) {
             console.log("[TimeReport] Got extension data service");
             window.dataService = dataService;
+            try {
+              var ctx = VSS.getWebContext();
+              currentUser = ctx.user;
+              collectionUri = ((ctx.collection || {}).uri || "").replace(/\/$/, "");
+              currentProjectName = (ctx.project || {}).name || "";
+              checkIsAdmin().then(function(admin) {
+                if (admin) document.getElementById('resyncBtn').style.display = '';
+              });
+            } catch(e) {}
             try { dataService.setValue('user-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light', { scopeType: 'User' }); } catch(e) {}
 
-            // Set default date range (last 30 days)
-            var today = new Date();
-            var thirtyDaysAgo = new Date(today);
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-            document.getElementById("dateTo").valueAsDate = today;
-            document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
+            setDefaultDateRange();
 
             console.log("[TimeReport] Running migration check...");
             function startLoad() {
@@ -261,6 +435,8 @@
                   if (hashFilters.dateTo)   document.getElementById("dateTo").value   = hashFilters.dateTo;
                   pendingFilters = hashFilters;
                 }
+                pendingFilters = pendingFilters || {};
+                if (pendingFilters.user === undefined) pendingFilters.user = defaultUserSelection();
                 startLoad();
               }, startLoad);
             }, startLoad);
@@ -271,6 +447,131 @@
           console.error("[TimeReport] Error in VSS.ready:", err);
         }
       });
+    }
+
+    // Default user filter: the logged-in user
+    function defaultUserSelection() {
+      return currentUser ? [String(currentUser.id)] : null;
+    }
+
+    // Default date range: current week (Mon..Sun)
+    function setDefaultDateRange() {
+      var week = TC.weekDates();
+      document.getElementById("dateFrom").value = week[0];
+      document.getElementById("dateTo").value = week[6];
+    }
+
+    // Filters apply immediately. Dates change which months are loaded,
+    // so they reload; the dropdowns filter the already-loaded entries.
+    ["dateFrom", "dateTo"].forEach(function(id) {
+      document.getElementById(id).addEventListener("change", function() {
+        if (window.dataService) loadAllEntries();
+      });
+    });
+    ["userFilter", "epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+      msInit(id, applyFilters);
+    });
+
+    // ---- Multi-select dropdown -------------------------------------
+    // <div class="ms" id="..." data-all="All X"></div>.
+    // selected === null means all (every box ticked, no filtering);
+    // otherwise it is the explicit set of ticked values (may be empty).
+    function msInit(id, onChange) {
+      var root = document.getElementById(id);
+      root.innerHTML = '<div class="ms-trigger" tabindex="0"></div><div class="ms-panel"></div>';
+      root._ms = { options: [], selected: null, onChange: onChange };
+      var trigger = root.querySelector(".ms-trigger");
+      trigger.addEventListener("click", function() { msToggle(root); });
+      trigger.addEventListener("keydown", function(ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); msToggle(root); }
+        if (ev.key === "Escape") root.classList.remove("open");
+      });
+      root.querySelector(".ms-panel").addEventListener("change", function(ev) {
+        var cb = ev.target, st = root._ms;
+        if (cb.dataset.all !== undefined) {
+          st.selected = cb.checked ? null : {};
+        } else {
+          if (st.selected === null) {
+            st.selected = {};
+            st.options.forEach(function(o) { st.selected[o.value] = true; });
+          }
+          if (cb.checked) st.selected[cb.value] = true;
+          else delete st.selected[cb.value];
+          msNormalize(st);
+        }
+        msRender(root);
+        root._ms.onChange();
+      });
+      msRender(root);
+    }
+
+    function msToggle(root) {
+      var wasOpen = root.classList.contains("open");
+      document.querySelectorAll(".ms.open").forEach(function(el) { el.classList.remove("open"); });
+      if (!wasOpen) root.classList.add("open");
+    }
+
+    document.addEventListener("click", function(ev) {
+      document.querySelectorAll(".ms.open").forEach(function(el) {
+        if (!el.contains(ev.target)) el.classList.remove("open");
+      });
+    });
+
+    // Every option ticked is the same as "all".
+    function msNormalize(st) {
+      if (st.selected && st.options.length && st.options.every(function(o) { return st.selected[o.value]; })) {
+        st.selected = null;
+      }
+    }
+
+    // options: [{value, label}]; selectedValues: array, or null / ["*"] for all.
+    // Values not in options are dropped; if none survive it falls back to all.
+    function msSetOptions(id, options, selectedValues) {
+      var st = document.getElementById(id)._ms;
+      var valid = {};
+      options.forEach(function(o) { valid[o.value] = true; });
+      st.options = options;
+      if (!selectedValues || selectedValues[0] === "*") {
+        st.selected = null;
+      } else {
+        st.selected = {};
+        selectedValues.forEach(function(v) { if (valid[v]) st.selected[v] = true; });
+        if (selectedValues.length && !Object.keys(st.selected).length) st.selected = null;
+        msNormalize(st);
+      }
+      msRender(document.getElementById(id));
+    }
+
+    // null = all; otherwise array of ticked values (may be empty).
+    function msGetValues(id) {
+      var sel = document.getElementById(id)._ms.selected;
+      return sel === null ? null : Object.keys(sel);
+    }
+
+    function msRender(root) {
+      var st = root._ms;
+      var all = st.selected === null;
+      var values = all ? [] : Object.keys(st.selected);
+      var label = root.dataset.all;
+      if (!all && values.length === 0) {
+        label = "None";
+      } else if (values.length === 1) {
+        var opt = st.options.find(function(o) { return o.value === values[0]; });
+        label = opt ? opt.label : values[0];
+      } else if (values.length > 1) {
+        label = values.length + " selected";
+      }
+      var trigger = root.querySelector(".ms-trigger");
+      trigger.textContent = label;
+      trigger.title = values.length > 1
+        ? st.options.filter(function(o) { return st.selected[o.value]; }).map(function(o) { return o.label; }).join(", ")
+        : label;
+      root.querySelector(".ms-panel").innerHTML =
+        '<label class="ms-option ms-all"><input type="checkbox" data-all' + (all ? ' checked' : '') + '> ' + escapeHtml(root.dataset.all) + '</label>' +
+        st.options.map(function(o) {
+          return '<label class="ms-option"><input type="checkbox" value="' + escapeHtml(o.value).replace(/"/g, "&quot;") + '"' +
+            (all || st.selected[o.value] ? ' checked' : '') + '> ' + escapeHtml(o.label) + '</label>';
+        }).join("");
     }
 
     // Start initialization
@@ -356,7 +657,8 @@
         return getEntriesForMonth(key);
       });
 
-      Promise.all(promises).then(function(results) {
+      Promise.all([Promise.all(promises), TC.refreshEditCutoff(window.dataService)]).then(function(res) {
+        var results = res[0];
         allEntries = [];
         results.forEach(function(monthEntries) {
           allEntries = allEntries.concat(monthEntries);
@@ -373,60 +675,38 @@
     }
 
     function populateFilters() {
-      // Save current selections (use pendingFilters from hash on first load)
+      // Keep current selections (use pendingFilters from hash on first load)
       var pf = pendingFilters;
       pendingFilters = null;
-      var savedUser    = pf && pf.user    !== undefined ? pf.user    : document.getElementById("userFilter").value;
-      var savedEpic    = pf && pf.epic    !== undefined ? pf.epic    : document.getElementById("epicFilter").value;
-      var savedProject = pf && pf.project !== undefined ? pf.project : document.getElementById("projectFilter").value;
-      var savedClient  = pf && pf.client  !== undefined ? pf.client  : document.getElementById("clientFilter").value;
-      var savedTag     = pf && pf.tag     !== undefined ? pf.tag     : document.getElementById("tagFilter").value;
+      function saved(key, id) { return pf && pf[key] !== undefined ? pf[key] : msGetValues(id); }
+      function setGroup(id, options, key, visible) {
+        msSetOptions(id, options, saved(key, id));
+        document.getElementById(id).closest('.filter-group').style.display = visible ? '' : 'none';
+      }
+      function plain(v) { return { value: v, label: v }; }
 
       // Unique users
-      var users = [...new Set(allEntries.map(e => JSON.stringify({id: e.userId, name: e.userName})))];
-      var userSelect = document.getElementById("userFilter");
-      userSelect.innerHTML = '<option value="">All Users</option>';
-      users.forEach(function(u) {
-        var user = JSON.parse(u);
-        var opt = document.createElement("option");
-        opt.value = user.id;
-        opt.textContent = user.name;
-        userSelect.appendChild(opt);
-      });
+      var users = {};
+      if (currentUser) users[currentUser.id] = currentUser.name;
+      allEntries.forEach(function(e) { if (!users[e.userId]) users[e.userId] = e.userName; });
+      var userOpts = Object.keys(users).map(function(id) { return { value: id, label: users[id] }; })
+        .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
+      setGroup("userFilter", userOpts, "user", userOpts.length > 1);
 
       // Unique epics
-      var epics = [...new Set(allEntries.filter(e => e.epicId).map(e => JSON.stringify({id: e.epicId, title: e.epicTitle})))];
-      var epicSelect = document.getElementById("epicFilter");
-      epicSelect.innerHTML = '<option value="">All Epics</option>';
-      epics.forEach(function(ep) {
-        var epic = JSON.parse(ep);
-        var opt = document.createElement("option");
-        opt.value = epic.id;
-        opt.textContent = epic.title;
-        epicSelect.appendChild(opt);
-      });
+      var epics = {};
+      allEntries.forEach(function(e) { if (e.epicId && !epics[e.epicId]) epics[e.epicId] = e.epicTitle; });
+      var epicOpts = Object.keys(epics).map(function(id) { return { value: id, label: epics[id] || ('#' + id) }; })
+        .sort(function(a, b) { return String(a.label).localeCompare(String(b.label)); });
+      setGroup("epicFilter", epicOpts, "epic", epicOpts.length > 0);
 
       // Unique projects
-      var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))];
-      var projectSelect = document.getElementById("projectFilter");
-      projectSelect.innerHTML = '<option value="">All Projects</option>';
-      projects.sort().forEach(function(proj) {
-        var opt = document.createElement("option");
-        opt.value = proj;
-        opt.textContent = proj;
-        projectSelect.appendChild(opt);
-      });
+      var projects = [...new Set(allEntries.map(e => e.project || "(No Project)"))].sort();
+      setGroup("projectFilter", projects.map(plain), "project", projects.some(function(p) { return p !== '(No Project)'; }));
 
       // Unique clients
-      var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))];
-      var clientSelect = document.getElementById("clientFilter");
-      clientSelect.innerHTML = '<option value="">All Clients</option>';
-      clients.sort().forEach(function(cli) {
-        var opt = document.createElement("option");
-        opt.value = cli;
-        opt.textContent = cli;
-        clientSelect.appendChild(opt);
-      });
+      var clients = [...new Set(allEntries.map(e => e.client || "(No Client)"))].sort();
+      setGroup("clientFilter", clients.map(plain), "client", clients.some(function(c) { return c !== '(No Client)'; }));
 
       // Unique tags
       var allTags = new Set();
@@ -438,40 +718,37 @@
           });
         }
       });
-      var tagSelect = document.getElementById("tagFilter");
-      tagSelect.innerHTML = '<option value="">All Tags</option>';
-      [...allTags].sort().forEach(function(tag) {
-        var opt = document.createElement("option");
-        opt.value = tag;
-        opt.textContent = tag;
-        tagSelect.appendChild(opt);
-      });
-
-      // Restore selections after rebuild
-      document.getElementById("userFilter").value    = savedUser;
-      document.getElementById("epicFilter").value    = savedEpic;
-      document.getElementById("projectFilter").value = savedProject;
-      document.getElementById("clientFilter").value  = savedClient;
-      document.getElementById("tagFilter").value     = savedTag;
+      setGroup("tagFilter", [...allTags].sort().map(plain), "tag", allTags.size > 0);
     }
 
     function applyFilters() {
       var dateFrom = document.getElementById("dateFrom").value;
       var dateTo = document.getElementById("dateTo").value;
-      var userId = document.getElementById("userFilter").value;
-      var epicId = document.getElementById("epicFilter").value;
-      var project = document.getElementById("projectFilter").value;
-      var client = document.getElementById("clientFilter").value;
-      var tag = document.getElementById("tagFilter").value;
+      function set(id) {
+        var v = msGetValues(id);
+        if (v === null) return null;
+        var s = {};
+        v.forEach(function(x) { s[x] = true; });
+        return s;
+      }
+      var users = set("userFilter");
+      var epics = set("epicFilter");
+      var projects = set("projectFilter");
+      var clients = set("clientFilter");
+      var tagValues = msGetValues("tagFilter");
+      var tags = tagValues && tagValues.map(function(t) { return t.toLowerCase(); });
 
       filteredEntries = allEntries.filter(function(e) {
         if (dateFrom && e.date < dateFrom) return false;
         if (dateTo && e.date > dateTo) return false;
-        if (userId && e.userId !== userId) return false;
-        if (epicId && String(e.epicId) !== String(epicId)) return false;
-        if (project && (e.project || "(No Project)") !== project) return false;
-        if (client && (e.client || "(No Client)") !== client) return false;
-        if (tag && (!e.tags || !e.tags.toLowerCase().includes(tag.toLowerCase()))) return false;
+        if (users && !users[e.userId]) return false;
+        if (epics && !epics[String(e.epicId)]) return false;
+        if (projects && !projects[e.project || "(No Project)"]) return false;
+        if (clients && !clients[e.client || "(No Client)"]) return false;
+        if (tags) {
+          var entryTags = (e.tags || "").split(";").map(function(t) { return t.trim().toLowerCase(); });
+          if (!tags.some(function(t) { return entryTags.indexOf(t) !== -1; })) return false;
+        }
         return true;
       });
 
@@ -481,19 +758,12 @@
     }
 
     function clearFilters() {
-      var today = new Date();
-      var thirtyDaysAgo = new Date(today);
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      document.getElementById("dateTo").valueAsDate = today;
-      document.getElementById("dateFrom").valueAsDate = thirtyDaysAgo;
-      document.getElementById("userFilter").value = "";
-      document.getElementById("epicFilter").value = "";
-      document.getElementById("projectFilter").value = "";
-      document.getElementById("clientFilter").value = "";
-      document.getElementById("tagFilter").value = "";
-      
-      applyFilters();
+      setDefaultDateRange();
+      ["epicFilter", "projectFilter", "clientFilter", "tagFilter"].forEach(function(id) {
+        document.getElementById(id)._ms.selected = null;
+      });
+      pendingFilters = { user: defaultUserSelection() };
+      loadAllEntries();
     }
 
     function updateSummary() {
@@ -556,7 +826,7 @@
       var thead = document.getElementById("tableHead");
       var tbody = document.getElementById("tableBody");
 
-      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Parent</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th></tr>";
+      thead.innerHTML = "<tr><th>Date</th><th>User</th><th>Work Item</th><th>Parent</th><th>Epic</th><th>Tags</th><th>Hours</th><th>Description</th><th></th></tr>";
 
       var sorted = [...filteredEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -565,21 +835,33 @@
           '<span class="tag">' + escapeHtml(t) + '</span>'
         ).join("") : "-";
 
-        // Show parent (User Story, Feature, etc.) if available and not an Epic
+        // Show the immediate parent, whatever its type (including Epic)
         var parentDisplay = "-";
-        if (e.parentTitle && e.parentType && e.parentType !== "Epic") {
+        if (e.parentTitle && e.parentType) {
           parentDisplay = escapeHtml(e.parentTitle) + " <small class='text-muted'>(" + escapeHtml(e.parentType) + ")</small>";
         }
+
+        var canModify = currentUser && e.userId === currentUser.id && !TC.isEntryLocked(e.date);
+        var actionBtns = canModify
+          ? '<button class="icon-btn edit-btn" title="Edit" onclick="editEntry(\'' + e.id + '\')">' + EDIT_ICON + '</button>' +
+            '<button class="icon-btn delete-btn" title="Delete" onclick="deleteEntry(\'' + e.id + '\')">' + DELETE_ICON + '</button>'
+          : '';
+
+        var wiUrl = getWorkItemUrl(e);
+        var wiIdLabel = wiUrl
+          ? '<a href="' + wiUrl + '" target="_blank" rel="noopener noreferrer">#' + e.workItemId + '</a>'
+          : '#' + e.workItemId;
 
         return "<tr>" +
           "<td>" + e.date + "</td>" +
           "<td>" + escapeHtml(e.userName) + "</td>" +
-          "<td>" + escapeHtml(e.workItemTitle) + " (#" + e.workItemId + ")</td>" +
+          "<td>" + escapeHtml(e.workItemTitle) + " (" + wiIdLabel + ")</td>" +
           "<td>" + parentDisplay + "</td>" +
           "<td>" + (e.epicTitle ? escapeHtml(e.epicTitle) : "-") + "</td>" +
           "<td>" + tags + "</td>" +
           "<td><strong>" + e.hours + "h</strong></td>" +
           "<td>" + (e.description ? escapeHtml(e.description) : "-") + "</td>" +
+          "<td class='actions-cell'>" + actionBtns + "</td>" +
         "</tr>";
       }).join("");
     }
@@ -1099,12 +1381,58 @@
       link.click();
     }
 
-    function escapeHtml(text) {
-      if (!text) return "";
-      var div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML;
+    function getWorkItemUrl(entry) {
+      var base = collectionUri.replace(/\/$/, "");
+      var proj = entry.teamProject || currentProjectName || "";
+      if (!base || !proj) return null;
+      return base + "/" + encodeURIComponent(proj) + "/_workitems/edit/" + entry.workItemId;
+    }
+
+    function deleteEntry(entryId) {
+      if (!confirm("Delete this time entry?")) return;
+      var entry = allEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { alert("Entry not found"); return; }
+      if (!currentUser || entry.userId !== currentUser.id) { alert("You can only delete your own entries"); return; }
+      getWitClient().then(function(client) {
+        return TC.deleteEntryById(window.dataService, entryId, entry.date, client);
+      }).then(function() {
+        loadAllEntries();
+      }, function() {
+        alert("Failed to delete entry");
+      });
+    }
+
+    function editEntry(entryId) {
+      var entry = allEntries.find(function(e) { return e.id === entryId; });
+      if (!entry) { alert('Entry not found'); return; }
+      if (!currentUser || entry.userId !== currentUser.id) { alert('You can only edit your own entries'); return; }
+      var seen = {}, recent = [];
+      allEntries.filter(function(e) {
+        return currentUser && String(e.userId) === String(currentUser.id);
+      }).slice().sort(function(a, b) {
+        return b.date > a.date ? -1 : b.date < a.date ? 1 : 0;
+      }).forEach(function(e) {
+        var k = String(e.workItemId);
+        if (!seen[k]) { seen[k] = true; recent.push({ id: e.workItemId, title: e.workItemTitle || '(untitled)', type: null }); }
+      });
+      TC.openAddEntryModal({
+        dataService: window.dataService,
+        witClientGetter: getWitClient,
+        currentUser: currentUser,
+        projectName: currentProjectName,
+        recentItems: recent.slice(0, 20),
+        title: 'Edit Time Entry',
+        saveLabel: 'Save',
+        initialItem: { id: entry.workItemId, title: entry.workItemTitle || '(untitled)', type: null },
+        initialHours: entry.hours,
+        initialDate: entry.date,
+        initialDesc: entry.description,
+        entryId: entry.id,
+        originalDate: entry.date,
+        onSaved: function() { loadAllEntries(); }
+      });
     }
   </script>
+
 </body>
 </html>

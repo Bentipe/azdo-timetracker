@@ -1,21 +1,11 @@
-html, body { height: 100%; overflow: auto; }
-body { padding: 10px; }
+html, body { height: 100vh; overflow: hidden; }
+body { padding: 0; display: flex; flex-direction: column; }
+#app { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; }
 
 #app { min-width: fit-content; }
 
-.time-entry-form { display: flex; flex-direction: column; gap: 12px; max-width: 400px; }
-
-.form-group { display: flex; flex-direction: column; gap: 4px; }
-
-label { font-weight: 600; color: var(--text-primary); }
-
-input, textarea { padding: 6px 8px; font-size: 14px; }
-
-.time-entries {
-  margin-top: 20px;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
-}
+.entries-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.entries-header h3 { margin: 0; }
 
 .time-entry-item {
   display: flex;
@@ -43,16 +33,10 @@ input, textarea { padding: 6px 8px; font-size: 14px; }
   color: var(--text-primary);
 }
 
-.delete-btn {
-  background: #d13438;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-.delete-btn:hover { background: #a4262c; }
-
 .message { padding: 8px; border-radius: 4px; margin-bottom: 12px; }
 .message.success { background: var(--success-bg); color: var(--success-text); }
 .message.error   { background: var(--error-bg);   color: var(--error-text); }
+.message.info    { background: var(--info-bg);    color: var(--info-text); }
 
 /* Nudge banner */
 .nudge-banner {
@@ -87,8 +71,6 @@ input, textarea { padding: 6px 8px; font-size: 14px; }
 .nudge-content { color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; }
 
 .nudge-quick-add { display: flex; gap: 8px; align-items: flex-end; }
-
-.nudge-input-small { padding: 4px 8px; font-size: 13px; width: 80px; }
 
 .nudge-btn { padding: 6px 12px; font-size: 13px; }
 

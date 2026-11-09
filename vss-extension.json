@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/vss-extension",
   "manifestVersion": 1,
   "id": "timetracker-extension",
-  "version": "1.6.1",
+  "version": "1.6.22",
   "name": "Time Tracker",
   "description": "Simple time tracking for user stories with reporting by user, epic, tag and date range",
   "publisher": "miguelnicolas",
@@ -57,36 +57,10 @@
         "ms.vss-work-web.work-hub-group"
       ],
       "properties": {
-        "name": "My Time",
-        "uri": "src/my-time.html",
+        "name": "Time Tracker",
+        "uri": "src/hub.html",
         "icon": "static/icon.png",
         "order": 10
-      }
-    },
-    {
-      "id": "time-report-hub",
-      "type": "ms.vss-web.hub",
-      "targets": [
-        "ms.vss-work-web.work-hub-group"
-      ],
-      "properties": {
-        "name": "Time Reports",
-        "uri": "src/time-report.html",
-        "icon": "static/icon.png",
-        "order": 20
-      }
-    },
-    {
-      "id": "notification-settings-hub",
-      "type": "ms.vss-web.hub",
-      "targets": [
-        "ms.vss-work-web.work-hub-group"
-      ],
-      "properties": {
-        "name": "Notification Settings",
-        "uri": "src/notification-settings.html",
-        "icon": "static/icon.png",
-        "order": 30
       }
     },
     {
@@ -113,6 +87,7 @@
   "scopes": [
     "vso.work",
     "vso.work_write",
-    "vso.extension.data_write"
+    "vso.extension.data_write",
+    "vso.identity"
   ]
 }
